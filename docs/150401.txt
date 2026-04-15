@@ -1,0 +1,112 @@
+Here’s the full picture of what I changed across this chat, grouped by area so it’s easier to follow.
+
+**App Setup And Project Structure**
+I helped turn the project into a proper Electron Forge + React app shape. That included fixing startup issues where Electron was pointing at the wrong main file, fixing Forge/Webpack setup, and cleaning up problems caused by the project path containing an apostrophe. I also adjusted the Forge ports to avoid collisions, and later added Tailwind support so you could use utility classes directly in the renderer.
+
+I also reorganized the renderer structure over time:
+- split top-level UI into clearer components
+- removed and reintroduced `App.jsx` based on your preference
+- moved the month view logic out of the old [Calender-tiles.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Calender-tiles.jsx) and into [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- grouped views under [components/Views](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views)
+- split the old introduction/header responsibilities into [Header.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Header.jsx:1) and [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
+
+**Local-First Data Layer**
+I started the local-first core you described. The app now has a local persisted store plus an append-only change log instead of being just a mock UI. That work lives in:
+- [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1)
+- [calendar-ipc.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\ipc\calendar-ipc.js:1)
+- [main.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\main.js:1)
+- [preload.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\preload.js:1)
+
+That made the app store real local events, expose snapshot/event APIs through IPC, and create a base for future sync.
+
+**Renderer And Event Creation**
+I wired the renderer to load the local snapshot and use real event data instead of placeholders. I also replaced the unsupported `prompt()` flow with a proper in-app event form. Then I moved that event form into a left-side slide-out drawer with stylesheet-driven animation, overlay, and later preserved it while the rest of the layout evolved.
+
+That work mainly touched:
+- [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+**Month View**
+I built the real month grid logic so the calendar tiles show actual days, spillover days from adjacent months, today highlighting, and events inside the tiles. Then I changed the layout so weekday labels only render once in a separate header row, and the month grid became fixed to 5 rows when you asked for that.
+
+Later I extracted that whole view into [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1), and then moved its header to the shared header system.
+
+The date-generation helpers live in:
+- [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
+
+**Week View**
+I added a proper week view, then upgraded it into a real vertical timeline with hours down the side and event blocks positioned by their real start/end time. I also added right-click creation on week slots so you can create events at a chosen hour directly from the grid.
+
+That mostly lives in:
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+
+**Year View**
+I first added a year view with month cards and event counts. After that, you asked for a more Google-like year layout, so I changed it into a true 12-month mini-calendar grid where each month shows all its days in a compact matrix. I also kept the count visible next to the month name.
+
+That lives in:
+- [YearView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\YearView.jsx:1)
+- [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
+
+**Day View**
+I added a dedicated day view with a vertical time grid and minute-aware event placement. Then I iterated on it a lot:
+- added right-click creation on visible slots
+- added zoom
+- changed zoom from endless scaling to fixed useful levels
+- removed the pointless 1-minute zoom
+- moved zoom into a right-side vertical rail
+- made the zoom rail sticky while scrolling
+- added `Ctrl + wheel` zoom centered around the hovered time
+
+That all lives mainly in:
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+**Header And Navigation Hierarchy**
+You gave a detailed hierarchy direction, and I refactored the calendar headers around that:
+- row 1 = `Today`, arrows, centered title, `Add event`
+- row 2 = centered view picker, secondary actions on the right
+- only Day keeps the large hero title
+- Week / Month / Year use calmer title sizes
+
+Then I centered both:
+- the `Day / Week / Month / Year` picker
+- the actual page title text
+
+Later I centralized the repeated view-header markup into:
+- [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+
+So now changing the header layout is much easier in one place instead of editing all four views manually.
+
+**Upcoming / About / Day Schedule**
+I changed `Upcoming` from a large in-page section into a popup panel, and moved “About this app” into its own right-side drawer. Then later I removed the bulky `Day schedule` block at the bottom of day view and turned it into a popup button.
+
+After that, because you wanted it available everywhere, I centralized that popup into:
+- [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+Now `Today’s schedule` appears in Day, Week, Month, and Year, and always shows today’s actual events no matter which view you’re in.
+
+**Introduction / User Name / Timezone**
+I updated the intro form so timezone is detected properly using real IANA timezones instead of hardcoded UTC offsets. Then I made the form save `name` and `timezone` into local storage so the schedule popup can greet the user by name.
+
+That work is in:
+- [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
+
+**Styling**
+A lot of the work was also in [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1), where I added:
+- Tailwind entry setup
+- calendar grid styles
+- week/day timeline styles
+- drawer and overlay animations
+- popup styles
+- zoom rail styles
+- shared calendar header layout
+- responsive behavior for the reorganized headers
+
+**What’s Centralized Now**
+If you want to customize key shared pieces, the main centralized places are:
+- shared calendar header: [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+- shared “Today’s schedule” popup: [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+- shared calendar date/grid helpers: [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
+- shared styling/layout rules: [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+If you want, I can do the next step and make you a short “project map” of which file controls what, so customizing this later is much easier.

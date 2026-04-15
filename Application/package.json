@@ -1,0 +1,41 @@
+{
+  "name": "calendar-app",
+  "productName": "Calendar App",
+  "version": "1.0.0",
+  "description": "Electron Forge calendar app with a React renderer.",
+  "license": "UNLICENSED",
+  "author": "REDKING_11",
+  "main": ".webpack/main",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "test": "echo \"No tests configured yet\""
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/plugin-transform-class-properties": "^7.28.6",
+    "@babel/preset-env": "^7.29.2",
+    "@babel/preset-react": "^7.28.5",
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-webpack": "^7.11.1",
+    "@tailwindcss/postcss": "^4.2.2",
+    "@vercel/webpack-asset-relocator-loader": "^1.10.0",
+    "autoprefixer": "^10.5.0",
+    "babel-loader": "^10.1.1",
+    "css-loader": "^7.1.4",
+    "electron": "^41.2.0",
+    "postcss": "^8.5.9",
+    "postcss-loader": "^8.2.1",
+    "style-loader": "^4.0.0",
+    "tailwindcss": "^4.2.2"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}
