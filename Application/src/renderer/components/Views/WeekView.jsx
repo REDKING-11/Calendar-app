@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { buildWeekDays } from '../calendar-helpers';
+import { buildWeekDays, startOfWeek } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 
@@ -13,6 +13,22 @@ function formatTime(dateString) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function formatTypeLabel(type) {
+  if (!type) {
+    return 'Event';
+  }
+
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+}
+
+function formatEventHeading(event) {
+  if (event.type === 'task') {
+    return event.completed ? `${event.title} (done)` : event.title;
+  }
+
+  return event.title;
 }
 
 function formatWeekTitle(startDate, endDate) {
@@ -54,6 +70,7 @@ export default function WeekView({
   selectedDate,
   onSelectDate,
   onCreateEvent,
+  onSelectEvent,
   calendarView,
   onChangeView,
 }) {
@@ -68,13 +85,13 @@ export default function WeekView({
   const goToPreviousWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() - 7);
-    onSelectDate?.(nextDate);
+    onSelectDate?.(startOfWeek(nextDate));
   };
 
   const goToNextWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() + 7);
-    onSelectDate?.(nextDate);
+    onSelectDate?.(startOfWeek(nextDate));
   };
 
   const goToToday = () => {
@@ -165,11 +182,36 @@ export default function WeekView({
                         height: `${layout.height}px`,
                         backgroundColor: event.color || '#4f9d69',
                       }}
+                      onClick={() => onSelectEvent?.(event)}
                     >
-                      <p className="week-event-title">{event.title}</p>
+                      <p className="week-event-title">{formatEventHeading(event)}</p>
+                      <p className="week-event-time">
+                        {event.type === 'task'
+                          ? event.completed
+                            ? 'Completed task'
+                            : 'Open task'
+                          : formatTypeLabel(event.type)}
+                      </p>
                       <p className="week-event-time">
                         {formatTime(event.startsAt)} - {formatTime(event.endsAt)}
                       </p>
+                      {event.tags?.length ? (
+                        <div className="event-inline-tag-list">
+                          {event.tags.slice(0, 2).map((tag) => (
+                            <span
+                              key={tag.id}
+                              className="event-inline-tag"
+                              style={{
+                                backgroundColor: `${tag.color}22`,
+                                borderColor: `${tag.color}55`,
+                                color: tag.color,
+                              }}
+                            >
+                              {tag.label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -197,13 +239,43 @@ export default function WeekView({
           {selectedDay.events.length > 0 ? (
             selectedDay.events.map((event) => (
               <article key={event.id} className="day-detail-item">
+                <button
+                  type="button"
+                  className="day-detail-item-button"
+                  onClick={() => onSelectEvent?.(event)}
+                >
                 <p className="day-detail-time">{formatTime(event.startsAt)}</p>
                 <div>
-                  <p className="day-detail-title">{event.title}</p>
+                  <p className="day-detail-title">{formatEventHeading(event)}</p>
+                  <p className="day-detail-subtle">
+                    {event.type === 'task'
+                      ? event.completed
+                        ? 'Completed task'
+                        : 'Open task'
+                      : formatTypeLabel(event.type)}
+                  </p>
+                  {event.tags?.length ? (
+                    <div className="event-inline-tag-list">
+                      {event.tags.map((tag) => (
+                        <span
+                          key={tag.id}
+                          className="event-inline-tag"
+                          style={{
+                            backgroundColor: `${tag.color}22`,
+                            borderColor: `${tag.color}55`,
+                            color: tag.color,
+                          }}
+                        >
+                          {tag.label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <p className="day-detail-subtle">
                     Ends at {formatTime(event.endsAt)}
                   </p>
                 </div>
+                </button>
               </article>
             ))
           ) : (

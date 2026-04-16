@@ -55,6 +55,22 @@ function formatMinutesLabel(totalMinutes) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
+function formatTypeLabel(type) {
+  if (!type) {
+    return 'Event';
+  }
+
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+}
+
+function formatEventHeading(event) {
+  if (event.type === 'task') {
+    return event.completed ? `${event.title} (done)` : event.title;
+  }
+
+  return event.title;
+}
+
 function getVisibleWindow(zoomState) {
   const zoomLevel = ZOOM_LEVELS[zoomState.zoomLevelIndex] || ZOOM_LEVELS[0];
   const halfRange = zoomLevel.visibleRangeMinutes / 2;
@@ -144,6 +160,7 @@ export default function DayView({
   events,
   selectedDate,
   onCreateEvent,
+  onSelectEvent,
   calendarView,
   onChangeView,
   onSelectDate,
@@ -322,11 +339,36 @@ export default function DayView({
                     height: `${layout.height}px`,
                     backgroundColor: event.color || '#4f9d69',
                   }}
+                  onClick={() => onSelectEvent?.(event)}
                 >
-                  <p className="week-event-title">{event.title}</p>
+                  <p className="week-event-title">{formatEventHeading(event)}</p>
+                  <p className="week-event-time">
+                    {event.type === 'task'
+                      ? event.completed
+                        ? 'Completed task'
+                        : 'Open task'
+                      : formatTypeLabel(event.type)}
+                  </p>
                   <p className="week-event-time">
                     {formatTime(event.startsAt)} - {formatTime(event.endsAt)}
                   </p>
+                  {event.tags?.length ? (
+                    <div className="event-inline-tag-list">
+                      {event.tags.slice(0, 2).map((tag) => (
+                        <span
+                          key={tag.id}
+                          className="event-inline-tag"
+                          style={{
+                            backgroundColor: `${tag.color}22`,
+                            borderColor: `${tag.color}55`,
+                            color: tag.color,
+                          }}
+                        >
+                          {tag.label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
