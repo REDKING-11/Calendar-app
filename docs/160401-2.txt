@@ -1,0 +1,80 @@
+Across this chat, I changed four big areas: calendar interaction, responsive UI/layout, local security/storage, and the new self-hosted backend plus hosted-sync client.
+
+**Calendar Interaction**
+I fixed month-view day selection so clicking anywhere in a day cell can start a new event, while existing event pills don’t hijack or get hijacked by that click. That work was in [Application/src/renderer/components/Views/MonthView.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Views/MonthView.jsx).
+
+I made the sidebar mini-calendar month chooser interactive so you can change months from the sidebar instead of only using arrows. That was done in [Application/src/renderer/components/Sidebar.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Sidebar.jsx) and [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css). After that, I removed the always-visible helper text and made it hover-only to save space.
+
+I also changed week-start behavior so calendars start on Monday outside `America/*` time zones and stay Sunday-first for `America/*`. That logic was updated in [Application/src/renderer/components/calendar-helpers.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/calendar-helpers.js) and synced with filtering/view logic in [Application/src/renderer/renderer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/renderer.jsx).
+
+**Responsive Layout and Header Cleanup**
+I made the app scale more fluidly across monitor/window sizes by loosening rigid width caps, using more flexible spacing/sizing, improving shrink behavior, and tightening responsive fallbacks. Those changes touched [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css), [Application/src/renderer/renderer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/renderer.jsx), [Application/src/renderer/components/CalendarViewport.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/CalendarViewport.jsx), and [Application/src/renderer/components/Header.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Header.jsx).
+
+For the cramped month-view header, I reworked the layout multiple times. I removed the extra `MONTH VIEW` label, compressed the controls into a single-line toolbar around the smaller breakpoint, converted the loose text actions into proper buttons, and made the header use more of the available width. That was centered in [Application/src/renderer/components/Views/CalendarViewHeader.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Views/CalendarViewHeader.jsx), [Application/src/renderer/components/Views/TodayScheduleControl.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Views/TodayScheduleControl.jsx), and [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css).
+
+I also set the Electron minimum window size to your screenshot size in [Application/src/main.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/main.js).
+
+**Local Security Foundation**
+I replaced the old plaintext JSON calendar storage with an encrypted SQLite-backed store in [Application/src/data/calendar-store.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/data/calendar-store.js). That work included:
+- encrypted event content at rest
+- encrypted legacy JSON backup migration
+- signed append-only change log entries
+- `syncPolicy`, `visibility`, `contentCipherVersion`, and provider link support
+- security audit logging
+- secure export and master-key rotation
+- trusted-device tracking and pairing groundwork
+- secure token storage for local provider linking
+
+The supporting security services live in [Application/src/security/secure-vault.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/secure-vault.js), [Application/src/security/crypto-service.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/crypto-service.js), [Application/src/security/oauth-service.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/oauth-service.js), [Application/src/security/trusted-device-service.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/trusted-device-service.js), and [Application/src/security/validation.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/validation.js). I exposed those features through [Application/src/ipc/calendar-ipc.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/ipc/calendar-ipc.js) and [Application/src/preload.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/preload.js), and surfaced summary status in [Application/src/renderer/components/HeroCard.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/HeroCard.jsx) and [Application/src/renderer/components/AboutDrawer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/AboutDrawer.jsx).
+
+I also added app-side tests in [Application/test/run-security-tests.js](/C:/Users/REDKING/Projects/Calendar-app/Application/test/run-security-tests.js). Later I expanded those tests to cover hosted-sync bootstrap behavior and hosted envelope projection into the local store.
+
+**Self-Hosted Backend**
+I created a new backend workspace in [SelfHdb](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb) as a standalone `Node + Fastify + Postgres` service. The main pieces are:
+- backend app: [SelfHdb/src/app.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/app.js)
+- startup: [SelfHdb/src/server.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/server.js)
+- config/env parsing: [SelfHdb/src/config.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/config.js)
+- pg pool/migrations: [SelfHdb/src/db/pool.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/db/pool.js), [SelfHdb/src/db/migrate.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/db/migrate.js)
+- crypto/helpers/errors/rate limiting: [SelfHdb/src/lib/crypto.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/lib/crypto.js), [SelfHdb/src/lib/errors.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/lib/errors.js), [SelfHdb/src/lib/rate-limit.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/lib/rate-limit.js)
+- auth/sessions/provider linking: [SelfHdb/src/services/auth-service.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/services/auth-service.js)
+- trusted devices/pairing: [SelfHdb/src/services/device-service.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/services/device-service.js)
+- signed push/pull sync: [SelfHdb/src/services/sync-service.js](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/src/services/sync-service.js)
+- schema: [SelfHdb/migrations/001_init.sql](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/migrations/001_init.sql)
+- deploy/config docs: [SelfHdb/.env.example](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/.env.example), [SelfHdb/Dockerfile](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/Dockerfile), [SelfHdb/docker-compose.yml](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/docker-compose.yml), [SelfHdb/README.md](/C:/Users/REDKING/Projects/Calendar-app/SelfHdb/README.md)
+
+That backend implements the owner-only personal-first model from your plan:
+- bootstrap/claim flow
+- Google/Microsoft OAuth entry points
+- short-lived access tokens and rotating refresh sessions
+- trusted-device registration and pairing approval
+- per-device signed sync envelopes
+- replay protection with nonce cache and timestamp checks
+- server-side authorization checks on protected routes
+- rate limiting for auth, pairing, refresh, and sync routes
+- encrypted-at-rest provider token storage and encrypted event-content blobs
+- future-ready RBAC/calendar membership tables, even though sharing APIs are deferred
+
+**Hosted Sync in the Electron App**
+After the backend scaffold, I added hosted-mode support in the desktop app so it can actually use that server. The new main-process client is [Application/src/security/hosted-sync-service.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/hosted-sync-service.js). It handles:
+- secure backend URL normalization
+- browser-based owner sign-in start
+- auth-flow polling
+- encrypted local storage of backend access/refresh tokens
+- access-token refresh
+- signed sync request headers
+- manual push/pull sync
+- local application of pulled event envelopes
+- safe disconnect/logout
+
+I integrated that into [Application/src/data/calendar-store.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/data/calendar-store.js), added IPC/preload methods in [calendar-ipc.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/ipc/calendar-ipc.js) and [preload.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/preload.js), and exposed it in the UI through [HostedSyncPanel.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/HostedSyncPanel.jsx), [AboutDrawer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/AboutDrawer.jsx), [HeroCard.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/HeroCard.jsx), and [renderer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/renderer.jsx).
+
+I also made sure hosted-sync tokens get re-encrypted during local master-key rotation, and I added a small local-device profile accessor in [Application/src/security/trusted-device-service.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/security/trusted-device-service.js) so the same Ed25519 device identity is reused for backend trust.
+
+**Checks and Commands**
+I ran syntax checks on the new backend and app security files, and both test suites pass now:
+- `Application`: encrypted-at-rest, migration, key rotation, hosted bootstrap clearing, hosted envelope projection
+- `SelfHdb`: JSON crypto, stable stringify, JWT, rate limiter, signed request payload
+
+I also installed the backend dependencies in `SelfHdb` with `npm install`, so that workspace is now runnable locally. That install reported `1 high severity vulnerability` in the dependency tree, which I have not fixed yet. Earlier in the chat, there was also a packaging failure from Electron locking `.webpack`, so generated `.webpack` files in the worktree are not meaningful source edits.
+
+If you want, I can do the next pass as a file-by-file changelog with exact methods/routes added in each file.
