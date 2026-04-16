@@ -83,7 +83,26 @@ export default function TodayScheduleControl({ events }) {
                       <span className="text-sm font-semibold text-slate-700">
                         {formatTime(event.startsAt)}
                       </span>
-                      <span className="flex-1 text-sm text-slate-900">{event.title}</span>
+                      <div className="flex-1">
+                        <span className="text-sm text-slate-900">{event.title}</span>
+                        {event.tags?.length ? (
+                          <div className="event-inline-tag-list mt-2">
+                            {event.tags.map((tag) => (
+                              <span
+                                key={tag.id}
+                                className="event-inline-tag"
+                                style={{
+                                  backgroundColor: `${tag.color}22`,
+                                  borderColor: `${tag.color}55`,
+                                  color: tag.color,
+                                }}
+                              >
+                                {tag.label}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   ))}
                 </div>

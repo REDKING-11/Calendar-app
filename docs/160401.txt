@@ -1,0 +1,480 @@
+**1. Renderer Refactor**
+I split the old oversized [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1) into smaller, easier-to-customize pieces.
+
+New files I created:
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+- [UpcomingPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\UpcomingPopover.jsx:1)
+- [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1)
+- [AboutDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\AboutDrawer.jsx:1)
+- [CalendarViewport.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\CalendarViewport.jsx:1)
+- [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1)
+
+What moved:
+- top-level app state stayed in `renderer.jsx`
+- sidebar markup moved into `Sidebar.jsx`
+- upcoming popup moved into `UpcomingPopover.jsx`
+- event drawer moved into `EventComposerDrawer.jsx`
+- about drawer moved into `AboutDrawer.jsx`
+- calendar view switching moved into `CalendarViewport.jsx`
+- event draft defaults, color presets, tag presets, and helper functions moved into `eventDraft.js`
+
+That made the top-level renderer much more like a coordinator instead of a giant mixed template.
+
+**2. Shared Calendar Header**
+Earlier in the chat I had already centralized the calendar view header into:
+- [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+
+In this part of the chat, that centralized header stayed the source of truth for:
+- `Today`
+- previous / next buttons
+- centered title
+- `Add event`
+- the `Day / Week / Month / Year` switcher
+- secondary-action slot on the right
+
+This means header customization no longer requires editing all four views separately.
+
+**3. Shared Today’s Schedule**
+I also centralized the “Today’s schedule” popup into:
+- [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+That component now:
+- appears in Day, Week, Month, and Year
+- always shows today’s actual events
+- uses the saved local user name if available
+- shows first event, last event, and all today’s events
+
+This stayed part of the shared view system during this chat.
+
+**4. Color Presets, Full Color Picker, And Tags**
+I extended the event model so color and tags are real stored event data.
+
+Data-layer changes in:
+- [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1)
+
+What I added there:
+- tags support in demo seed events
+- `normalizeTags()` helper
+- `tags` saved on created events
+- `tags` included in change log patches
+- `tags` supported in update flow
+
+Renderer/composer changes:
+- event color presets
+- full color picker
+- tag color presets
+- full tag color picker
+- add/remove tag flow in the event composer
+
+That UI now lives in:
+- [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1)
+
+Shared draft logic moved to:
+- [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1)
+
+**5. Tag Visibility In The UI**
+I made tags actually show up in the calendar UI instead of being hidden data.
+
+Updated displays:
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+- [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+What changed:
+- month pills can show a tag-prefixed preview
+- week/day event blocks can show inline tag chips
+- today’s schedule popup can show inline tag chips
+
+**6. Sidebar Became Real**
+The sidebar started as mostly placeholder UI. I made it functional.
+
+Main file:
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+
+What now works:
+- `Create` opens the event composer
+- mini month arrows navigate the mini calendar month
+- clicking a day in the mini calendar selects that date
+- search filters events by title or tag
+- tag filters actually affect what events are visible in the app
+- `Clear` resets search + tag filters
+- visible-events list shows matching events and lets you jump to their date
+
+Renderer state changes to support this:
+- added `searchQuery`
+- added `activeTagFilters`
+- filtered `events` through search and tag conditions before sending them into the views
+
+That logic is in:
+- [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+
+**7. Sidebar Layout / Shell Fix**
+You wanted the sidebar to really own the left side, with the header only above the right content stack instead of stretching across the whole app.
+
+I fixed that by restructuring the page shell.
+
+Files changed:
+- [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+- [Header.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Header.jsx:1)
+- [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+What changed:
+- replaced the old awkward offset-based setup
+- built a real two-column shell
+- left column = sidebar
+- right column = header, setup panel, calendar content
+- sidebar gets full-height behavior on desktop
+- mobile still collapses to one column
+
+**8. Sidebar Visual Behavior Fixes**
+You asked for better mini-calendar behavior and better scrolling.
+
+I updated:
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+What changed:
+- today now always has the stronger glow in the mini calendar
+- selected day gets a softer glow
+- if selected day is also today, today still remains visually dominant
+- week navigation now lands on the first day of the next/previous week
+- only the visible-events panel scrolls
+- the whole sidebar no longer scrolls as one block
+
+**9. Left-Side Scrollbar**
+You gave CSS using `direction: rtl` / `direction: ltr` to move the scrollbar to the left.
+
+I applied that to the sidebar visible-events list.
+
+Files changed:
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+What changed:
+- `.sidebar-visible-events` now uses `direction: rtl`
+- each event row is wrapped with a child restoring `direction: ltr`
+
+Result:
+- scrollbar appears on the left
+- event content still reads normally
+
+**10. Styling Work**
+Most of the shared styling changes in this chat ended up in:
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+This file now includes or was updated for:
+- app shell / two-column page layout
+- sidebar behavior
+- sidebar mini-day glow states
+- scrollable visible-events panel
+- left-side scrollbar trick
+- color swatches and active states
+- tag chips and inline tag badges
+- event composer visual polish
+
+**11. Files That Matter Most Now**
+If you want to customize the app after all this, the main entry points are:
+
+- page orchestration:
+  [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+
+- sidebar:
+  [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+
+- event drawer:
+  [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1)
+
+- shared calendar header:
+  [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+
+- shared today schedule popup:
+  [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+- event presets / draft helpers:
+  [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1)
+
+- calendar data model:
+  [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1)
+
+- shared styling:
+  [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+**12. Verification**
+During this chat I repeatedly ran compile/transpile checks after major refactors:
+- renderer split
+- centralized header
+- centralized today schedule
+- sidebar functional changes
+- shell layout fix
+- sidebar glow / scroll changes
+- left-side scrollbar change
+
+
+
+
+
+
+Here’s a full detailed recap of everything I changed in this chat.
+
+**Quick Filters**
+I made the sidebar quick filters actually work instead of just looking like controls.
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), I added real `quickFilter` state with:
+- `All`
+- `Today`
+- `This week`
+- `This month`
+
+Those now affect the actual filtered event list before it goes into the calendar UI, the upcoming popup, and the sidebar event list.
+
+In [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1), I turned `Quick filters` into a collapsible section with:
+- time-scope pills
+- tag filters under them
+- a `Clear` action that resets search, quick filter, and tag filters
+
+I also changed the sidebar behavior so when `Quick filters` is open, `Visible events` is hidden and replaced with a small placeholder message, which matches what you asked for.
+
+**Visible Events Scope**
+I fixed `Visible events` so it no longer always shows every globally filtered event.
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), I added separate logic for `visibleEvents` based on the current view:
+- `Day` shows only that day’s events
+- `Week` shows only that week’s events
+- `Month` shows only that month’s events
+- `Year` shows only that year’s events
+
+Then [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1) was updated to use `visibleEvents` for the sidebar list and count, while still using the broader filtered event list for the mini calendar and filters.
+
+**Shared Tags**
+I improved tags so they behave like a reusable shared system instead of isolated one-off labels attached to a single event.
+
+In [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1), I added a shared tag catalog:
+- normalized tag labels
+- tag catalog merging
+- tag reuse by label
+- tags returned in snapshots
+
+The store now keeps `tags` in state, not just tags buried inside events.
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), I added a fallback that rebuilds available tags from event data too, so the UI still works even if the store-side tag catalog is stale.
+
+In [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1), tag filters now come from the shared tag pool.
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1), I added reusable existing tags so you can click an existing tag and reuse it on a new event.
+
+**Event Create/Edit/Delete Flow**
+I added a proper event overview and editing flow so events are no longer just static pills.
+
+New component:
+- [EventOverviewPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventOverviewPopover.jsx:1)
+
+What it does:
+- opens when you click an event in day/week/month
+- shows title, time, color, tags, type, and later description/task fields
+- has `Edit event`
+- has `Delete`
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), I added:
+- `activeEvent`
+- `composerMode` (`create` / `edit`)
+- edit flow using `window.calendarApp.updateEvent(...)`
+- delete flow using `window.calendarApp.deleteEvent(...)`
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1), I updated the drawer so it works in both create mode and edit mode.
+
+In [CalendarViewport.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\CalendarViewport.jsx:1), I passed `onSelectEvent` through to the views.
+
+Then I updated these views so events are clickable:
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+
+**Descriptions**
+You asked for descriptions, so I added them end to end.
+
+In [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1):
+- demo events now include `description`
+- create/update logic now persists `description`
+- change-log patches now include `description`
+
+In [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1):
+- draft events now include `description`
+- edit drafts load existing descriptions
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1):
+- added description textarea
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1):
+- create/edit submit now passes `description`
+
+In [EventOverviewPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventOverviewPopover.jsx:1):
+- description now shows in the overview
+
+**Event Types**
+You showed a reference with event modes like `Event`, `Task`, and `Appointment`, so I turned those into a real type system.
+
+In [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1):
+- added `EVENT_TYPE_OPTIONS`
+- draft events now store `type`
+
+In [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1):
+- create/update/demo data now store `type`
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1):
+- create/edit submit now passes `type`
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1):
+- added the type switcher pills
+
+In the display layer:
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+- [EventOverviewPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventOverviewPopover.jsx:1)
+
+Those now show the type back in the UI.
+
+**Different Behavior For Event / Task / Appointment**
+After that, I made the types behave differently instead of only having different labels.
+
+In [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1), I added:
+- `endTime`
+- `completed`
+
+In [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1), I added:
+- `completed`
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), I changed submit behavior:
+- `Event` and `Appointment` use start + end time
+- `Task` behaves like a due item and auto-creates a short internal duration if needed
+- `completed` is saved
+
+In the views and popover:
+- tasks show as `Open task` / `Completed task`
+- completed tasks show differently in labels and headings
+
+**Task-Specific Fields**
+Then you asked for real task-specific fields:
+- when it should be done
+- whether it repeats
+- whether it has a deadline
+- whether it belongs to a group
+- remove the other stuff except description
+
+I implemented that.
+
+In [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1), I added:
+- `TASK_REPEAT_OPTIONS`
+- `repeat`
+- `hasDeadline`
+- `groupName`
+
+In [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1), I added persistence for:
+- `repeat`
+- `hasDeadline`
+- `groupName`
+
+In [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1), create/edit now passes those fields through.
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1), task mode now shows:
+- title
+- description
+- date
+- due time
+- repeat
+- has deadline
+- group
+- completed checkbox in edit mode
+
+And task mode hides:
+- end time
+- color section
+- tags section
+
+So task mode is now much cleaner and much less like event mode.
+
+In [EventOverviewPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventOverviewPopover.jsx:1), task overview now shows:
+- status
+- repeat
+- deadline
+- group
+
+**Event Maker Layout / Usability**
+You said the event maker was too long and you couldn’t reach save. I fixed that too.
+
+In [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1), I restructured it into:
+- fixed top/header area
+- scrollable form body
+- sticky footer with `Cancel` and `Save`
+
+I also compacted the form:
+- grouped date/time fields into a tighter grid
+- reduced vertical sprawl
+- shortened description height
+- kept action buttons pinned
+
+In [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1), I added:
+- `event-composer-layout`
+- `event-composer-scroll`
+- `event-composer-footer`
+- `event-composer-grid`
+- compact color row handling
+- mobile fallback for the form grid
+
+That made the drawer much more usable.
+
+**Color Picker Position**
+Earlier in this chat, I also changed the event color area so the full color picker sits next to the preset swatches instead of underneath them.
+
+That was done in:
+- [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1)
+
+**Styling Work**
+A lot of the UX improvements in this chat landed in:
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+That file was updated for:
+- quick filter transitions
+- visible-events hide behavior
+- event type pills
+- clickable event pills/blocks
+- event overview popup styles
+- compact composer layout
+- sticky composer footer
+- compact color picker row
+
+**Main Files Touched In This Chat**
+The main files I changed in this chat were:
+- [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+- [Sidebar.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Sidebar.jsx:1)
+- [EventComposerDrawer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventComposerDrawer.jsx:1)
+- [EventOverviewPopover.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\EventOverviewPopover.jsx:1)
+- [CalendarViewport.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\CalendarViewport.jsx:1)
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+- [eventDraft.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\eventDraft.js:1)
+- [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+**Verification**
+During this chat I repeatedly ran compile/syntax checks after major changes, including:
+- quick filters
+- shared tags
+- event overview/edit/delete
+- descriptions
+- event types
+- task-specific fields
+- composer layout refactor
+
+So the changes were checked at the code/transpile level as I went, not just patched blindly.
+
+If you want, I can turn this next into a cleaner “customization map” like:
+- `change task behavior here`
+- `change sidebar filters here`
+- `change event overview here`
+- `change event form layout here`

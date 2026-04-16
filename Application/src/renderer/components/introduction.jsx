@@ -45,7 +45,7 @@ export default function Introduction({ isOpen, onOpenChange }) {
   }
 
   return (
-    <section className="mx-auto flex w-full max-w-[1800px] flex-col gap-3 px-6 xl:px-8">
+    <section className="flex w-full flex-col gap-3">
       <form
         onSubmit={handleSubmit}
         className="grid gap-4 rounded-[24px] border border-slate-900/8 bg-white/70 p-5 shadow-[0_18px_50px_rgba(36,52,89,0.10)] backdrop-blur-md md:grid-cols-[1fr_1fr_auto]"

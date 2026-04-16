@@ -1,37 +1,134 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import AboutDrawer from './components/AboutDrawer';
+import CalendarViewport from './components/CalendarViewport';
+import EventComposerDrawer from './components/EventComposerDrawer';
+import EventOverviewPopover from './components/EventOverviewPopover';
 import Header from './components/Header';
-import HeroCard from './components/HeroCard';
-import DayView from './components/Views/DayView';
-import MonthView from './components/Views/MonthView';
-import WeekView from './components/Views/WeekView';
-import YearView from './components/Views/YearView';
 import Introduction from './components/introduction';
+import Sidebar from './components/Sidebar';
+import UpcomingPopover from './components/UpcomingPopover';
+import {
+  createDraftEventFromEvent,
+  createDraftTagId,
+  createEmptyDraftEvent,
+  createEmptyDraftTag,
+} from './eventDraft';
 import './styles.css';
 
-function formatDateForInput(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+function isSameDay(left, right) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
 }
 
-function formatTimeForInput(date) {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+function startOfWeek(date) {
+  const nextDate = new Date(date);
+  nextDate.setHours(0, 0, 0, 0);
+  nextDate.setDate(nextDate.getDate() - nextDate.getDay());
+  return nextDate;
+}
+
+function endOfWeek(date) {
+  const nextDate = startOfWeek(date);
+  nextDate.setDate(nextDate.getDate() + 7);
+  return nextDate;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 1);
+}
+
+function getVisibleEventsForView(events, calendarView, selectedDate) {
+  if (!selectedDate) {
+    return events;
+  }
+
+  if (calendarView === 'day') {
+    return events.filter((event) => isSameDay(new Date(event.startsAt), selectedDate));
+  }
+
+  if (calendarView === 'week') {
+    const weekStart = startOfWeek(selectedDate);
+    const weekEnd = endOfWeek(selectedDate);
+    return events.filter((event) => {
+      const startsAt = new Date(event.startsAt);
+      return startsAt >= weekStart && startsAt < weekEnd;
+    });
+  }
+
+  if (calendarView === 'month') {
+    const monthStart = startOfMonth(selectedDate);
+    const monthEnd = endOfMonth(selectedDate);
+    return events.filter((event) => {
+      const startsAt = new Date(event.startsAt);
+      return startsAt >= monthStart && startsAt < monthEnd;
+    });
+  }
+
+  if (calendarView === 'year') {
+    const year = selectedDate.getFullYear();
+    return events.filter((event) => new Date(event.startsAt).getFullYear() === year);
+  }
+
+  return events;
+}
+
+function collectAvailableTags(events = [], snapshotTags = []) {
+  const tags = new Map();
+
+  for (const tag of snapshotTags) {
+    if (!tag?.label) {
+      continue;
+    }
+
+    tags.set(tag.label.toLowerCase(), {
+      id: tag.id || tag.label,
+      label: tag.label,
+      color: tag.color || '#475569',
+    });
+  }
+
+  for (const event of events) {
+    for (const tag of event.tags || []) {
+      if (!tag?.label) {
+        continue;
+      }
+
+      const key = tag.label.toLowerCase();
+      if (!tags.has(key)) {
+        tags.set(key, {
+          id: tag.id || tag.label,
+          label: tag.label,
+          color: tag.color || '#475569',
+        });
+      }
+    }
+  }
+
+  return Array.from(tags.values()).sort((left, right) =>
+    left.label.localeCompare(right.label)
+  );
 }
 
 function App() {
   const [snapshot, setSnapshot] = useState(null);
-  const [draftEvent, setDraftEvent] = useState({
-    title: '',
-    date: formatDateForInput(new Date()),
-    time: '10:00',
-  });
+  const [draftEvent, setDraftEvent] = useState(() => createEmptyDraftEvent(new Date()));
+  const [draftTag, setDraftTag] = useState(createEmptyDraftTag);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [composerMode, setComposerMode] = useState('create');
+  const [activeEvent, setActiveEvent] = useState(null);
   const [calendarView, setCalendarView] = useState('month');
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [quickFilter, setQuickFilter] = useState('all');
+  const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [isUpcomingOpen, setIsUpcomingOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSetupOpen, setIsSetupOpen] = useState(false);
@@ -53,23 +150,89 @@ function App() {
     };
   }, []);
 
-  const openComposer = (selectedDate = new Date()) => {
-    const defaultTime =
-      selectedDate.getHours() === 0 && selectedDate.getMinutes() === 0
-        ? '09:00'
-        : formatTimeForInput(selectedDate);
+  const allEvents = snapshot?.events || [];
+  const availableTags = useMemo(
+    () => collectAvailableTags(allEvents, snapshot?.tags || []),
+    [allEvents, snapshot?.tags]
+  );
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const events = useMemo(
+    () =>
+      allEvents.filter((event) => {
+        const eventStart = new Date(event.startsAt);
+        const matchesSearch =
+          !normalizedSearchQuery ||
+          event.title.toLowerCase().includes(normalizedSearchQuery) ||
+          (event.tags || []).some((tag) =>
+            tag.label.toLowerCase().includes(normalizedSearchQuery)
+          );
+        const matchesQuickFilter =
+          quickFilter === 'all' ||
+          (quickFilter === 'today' && isSameDay(eventStart, new Date())) ||
+          (quickFilter === 'week' &&
+            eventStart >= startOfWeek(new Date()) &&
+            eventStart < endOfWeek(new Date())) ||
+          (quickFilter === 'month' &&
+            eventStart >= startOfMonth(new Date()) &&
+            eventStart < endOfMonth(new Date()));
+        const matchesTags =
+          activeTagFilters.length === 0 ||
+          activeTagFilters.every((filterId) =>
+            (event.tags || []).some((tag) => tag.label === filterId)
+          );
 
-    setSelectedDate(selectedDate);
-    setDraftEvent({
-      title: '',
-      date: formatDateForInput(selectedDate),
-      time: defaultTime,
-    });
+        return matchesSearch && matchesQuickFilter && matchesTags;
+      }),
+    [allEvents, normalizedSearchQuery, quickFilter, activeTagFilters]
+  );
+  const visibleEvents = useMemo(
+    () => getVisibleEventsForView(events, calendarView, selectedDate),
+    [events, calendarView, selectedDate]
+  );
+
+  const upcomingDays = useMemo(
+    () =>
+      events.slice(0, 5).map((event) => {
+        const startsAt = new Date(event.startsAt);
+        return {
+          id: event.id,
+          day: startsAt.toLocaleDateString('en-US', { weekday: 'short' }),
+          date: startsAt.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+          }),
+          time: startsAt.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+          }),
+          focus: event.title,
+          startsAt,
+        };
+      }),
+    [events]
+  );
+
+  const openComposer = (date = new Date()) => {
+    setActiveEvent(null);
+    setComposerMode('create');
+    setSelectedDate(date);
+    setDraftEvent(createEmptyDraftEvent(date));
+    setDraftTag(createEmptyDraftTag());
+    setIsComposerOpen(true);
+  };
+
+  const openEditComposer = (event) => {
+    setActiveEvent(event);
+    setComposerMode('edit');
+    setSelectedDate(new Date(event.startsAt));
+    setDraftEvent(createDraftEventFromEvent(event));
+    setDraftTag(createEmptyDraftTag());
     setIsComposerOpen(true);
   };
 
   const closeComposer = () => {
     setIsComposerOpen(false);
+    setComposerMode('create');
   };
 
   const handleDraftChange = (event) => {
@@ -80,285 +243,245 @@ function App() {
     }));
   };
 
+  const handleDraftTagChange = (event) => {
+    const { name, value } = event.target;
+    setDraftTag((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  };
+
+  const handleAddTag = (availableTags = []) => {
+    if (!draftTag.label.trim()) {
+      return;
+    }
+
+    const matchingTag = availableTags.find(
+      (tag) => tag.label.toLowerCase() === draftTag.label.trim().toLowerCase()
+    );
+
+    setDraftEvent((current) => ({
+      ...current,
+      tags: current.tags.some(
+        (tag) => tag.label.toLowerCase() === draftTag.label.trim().toLowerCase()
+      )
+        ? current.tags
+        : [
+            ...current.tags,
+            matchingTag || {
+              id: createDraftTagId(),
+              label: draftTag.label.trim(),
+              color: draftTag.color,
+            },
+          ],
+    }));
+    setDraftTag((current) => ({
+      ...current,
+      label: '',
+    }));
+  };
+
+  const handleRemoveTag = (tagId) => {
+    setDraftEvent((current) => ({
+      ...current,
+      tags: current.tags.filter((tag) => tag.id !== tagId),
+    }));
+  };
+
+  const handleToggleTagFilter = (filterId) => {
+    setActiveTagFilters((current) =>
+      current.includes(filterId)
+        ? current.filter((item) => item !== filterId)
+        : [...current, filterId]
+    );
+  };
+
   const handleCreateEvent = async (event) => {
     event.preventDefault();
 
-    if (!draftEvent.title.trim() || !draftEvent.date || !draftEvent.time) {
+    if (
+      !draftEvent.title.trim() ||
+      !draftEvent.date ||
+      !draftEvent.time ||
+      (draftEvent.type !== 'task' && !draftEvent.endTime)
+    ) {
       return;
     }
 
     const startsAt = new Date(`${draftEvent.date}T${draftEvent.time}:00`);
-    const endsAt = new Date(startsAt);
-    endsAt.setHours(endsAt.getHours() + 1);
+    const endsAt =
+      draftEvent.type === 'task'
+        ? new Date(new Date(`${draftEvent.date}T${draftEvent.time}:00`).getTime() + 30 * 60 * 1000)
+        : new Date(`${draftEvent.date}T${draftEvent.endTime}:00`);
 
-    const nextSnapshot = await window.calendarApp.createEvent({
-      title: draftEvent.title.trim(),
-      startsAt: startsAt.toISOString(),
-      endsAt: endsAt.toISOString(),
-      color: '#4f9d69',
-    });
+    if (endsAt <= startsAt) {
+      endsAt.setHours(startsAt.getHours() + 1);
+      endsAt.setMinutes(startsAt.getMinutes());
+    }
+
+    const nextSnapshot =
+      composerMode === 'edit' && activeEvent
+        ? await window.calendarApp.updateEvent({
+            id: activeEvent.id,
+            title: draftEvent.title.trim(),
+            description: draftEvent.description.trim(),
+            type: draftEvent.type,
+            completed: Boolean(draftEvent.completed),
+            repeat: draftEvent.type === 'task' ? draftEvent.repeat : 'none',
+            hasDeadline: draftEvent.type === 'task' ? Boolean(draftEvent.hasDeadline) : false,
+            groupName: draftEvent.type === 'task' ? draftEvent.groupName.trim() : '',
+            startsAt: startsAt.toISOString(),
+            endsAt: endsAt.toISOString(),
+            color: draftEvent.color,
+            tags: draftEvent.tags,
+          })
+        : await window.calendarApp.createEvent({
+            title: draftEvent.title.trim(),
+            description: draftEvent.description.trim(),
+            type: draftEvent.type,
+            completed: Boolean(draftEvent.completed),
+            repeat: draftEvent.type === 'task' ? draftEvent.repeat : 'none',
+            hasDeadline: draftEvent.type === 'task' ? Boolean(draftEvent.hasDeadline) : false,
+            groupName: draftEvent.type === 'task' ? draftEvent.groupName.trim() : '',
+            startsAt: startsAt.toISOString(),
+            endsAt: endsAt.toISOString(),
+            color: draftEvent.color,
+            tags: draftEvent.tags,
+          });
 
     setSnapshot(nextSnapshot);
+    setActiveEvent(null);
     closeComposer();
   };
 
-  const upcomingDays = (snapshot?.events || []).slice(0, 5).map((event) => {
-    const startsAt = new Date(event.startsAt);
-    return {
-      id: event.id,
-      day: startsAt.toLocaleDateString('en-US', { weekday: 'short' }),
-      date: startsAt.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      }),
-      time: startsAt.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
-      focus: event.title,
-      startsAt,
-    };
-  });
+  const handleDeleteEvent = async (eventToDelete) => {
+    const nextSnapshot = await window.calendarApp.deleteEvent(eventToDelete.id);
+    setSnapshot(nextSnapshot);
+    setActiveEvent(null);
+  };
 
   return (
     <>
-      <div className="flex h-screen flex-col overflow-hidden">
-        <Header
-          eventCount={snapshot?.stats?.activeEventCount || 0}
-          onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
-          onOpenAbout={() => setIsAboutOpen(true)}
-          timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          onToggleSetup={() => setIsSetupOpen((current) => !current)}
-          isSetupOpen={isSetupOpen}
+      <div className="app-shell overflow-hidden">
+        <Sidebar
+          availableTags={availableTags}
+          events={events}
+          visibleEvents={visibleEvents}
+          selectedDate={selectedDate}
+          onSelectDate={setSelectedDate}
+          onCreateEvent={openComposer}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          quickFilter={quickFilter}
+          onQuickFilterChange={setQuickFilter}
+          activeTagFilters={activeTagFilters}
+          onToggleTagFilter={handleToggleTagFilter}
+          onClearFilters={() => {
+            setSearchQuery('');
+            setQuickFilter('all');
+            setActiveTagFilters([]);
+          }}
         />
-        <Introduction isOpen={isSetupOpen} onOpenChange={setIsSetupOpen} />
-        <main className="mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-6 overflow-hidden px-6 pb-6 pt-4 xl:grid-cols-[1fr] xl:grid-rows-[minmax(0,1fr)] xl:px-8">
-          <div className="relative min-h-0">
-            {isUpcomingOpen ? (
-              <section className="upcoming-popover">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                      Quick view
-                    </p>
-                    <h2 className="m-0 text-2xl font-semibold text-slate-900">
-                      What&apos;s up next
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsUpcomingOpen(false)}
-                    className="rounded-full border border-slate-900/12 bg-white/85 px-3 py-2 text-sm text-slate-700 transition hover:bg-white"
-                  >
-                    Close
-                  </button>
-                </div>
 
-                <div className="grid gap-3">
-                  {upcomingDays.length > 0 ? (
-                    upcomingDays.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="grid gap-1 rounded-2xl border border-slate-900/6 bg-white/90 px-4 py-3 text-left transition hover:bg-white"
-                        onClick={() => {
-                          setSelectedDate(item.startsAt);
-                          setIsUpcomingOpen(false);
-                        }}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-sm font-semibold text-slate-500">
-                            {item.day} {item.date}
-                          </span>
-                          <span className="text-sm text-slate-500">{item.time}</span>
-                        </div>
-                        <p className="m-0 text-base font-medium text-slate-900">
-                          {item.focus}
-                        </p>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="rounded-2xl border border-slate-900/6 bg-white/90 px-4 py-3 text-slate-600">
-                      Nothing scheduled yet.
-                    </div>
-                  )}
-                </div>
-              </section>
+        <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          <Header
+            eventCount={snapshot?.stats?.activeEventCount || 0}
+            onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
+            onOpenAbout={() => setIsAboutOpen(true)}
+            timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+            onToggleSetup={() => setIsSetupOpen((current) => !current)}
+            isSetupOpen={isSetupOpen}
+          />
+
+          <Introduction isOpen={isSetupOpen} onOpenChange={setIsSetupOpen} />
+
+          <main className="relative min-h-0 flex-1 overflow-hidden">
+            {isUpcomingOpen ? (
+              <UpcomingPopover
+                items={upcomingDays}
+                onClose={() => setIsUpcomingOpen(false)}
+                onSelectItem={(item) => {
+                  setSelectedDate(item.startsAt);
+                  setActiveEvent(null);
+                  setIsUpcomingOpen(false);
+                }}
+              />
             ) : null}
 
-            <div className="h-full min-h-0">
-              {calendarView === 'day' ? (
-                <DayView
-                  events={snapshot?.events || []}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  onCreateEvent={openComposer}
-                  calendarView={calendarView}
-                  onChangeView={setCalendarView}
-                />
-              ) : null}
-              {calendarView === 'month' ? (
-                <MonthView
-                  events={snapshot?.events || []}
-                  onCreateEvent={openComposer}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  calendarView={calendarView}
-                  onChangeView={setCalendarView}
-                />
-              ) : null}
-              {calendarView === 'week' ? (
-                <WeekView
-                  events={snapshot?.events || []}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  onCreateEvent={openComposer}
-                  calendarView={calendarView}
-                  onChangeView={setCalendarView}
-                />
-              ) : null}
-              {calendarView === 'year' ? (
-                <YearView
-                  events={snapshot?.events || []}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  onCreateEvent={openComposer}
-                  onSelectMonth={(date) => {
-                    setSelectedDate(date);
-                    setCalendarView('month');
-                  }}
-                  calendarView={calendarView}
-                  onChangeView={setCalendarView}
-                />
-              ) : null}
-            </div>
-          </div>
-        </main>
+            <CalendarViewport
+              calendarView={calendarView}
+              events={events}
+              selectedDate={selectedDate}
+              onSelectDate={setSelectedDate}
+              onCreateEvent={openComposer}
+              onSelectEvent={setActiveEvent}
+              onChangeView={setCalendarView}
+              onSelectMonth={(date) => {
+                setSelectedDate(date);
+                setCalendarView('month');
+              }}
+            />
+
+            {activeEvent ? (
+              <EventOverviewPopover
+                event={activeEvent}
+                onClose={() => setActiveEvent(null)}
+                onEdit={(event) => {
+                  setActiveEvent(null);
+                  openEditComposer(event);
+                }}
+                onDelete={handleDeleteEvent}
+              />
+            ) : null}
+          </main>
+        </div>
       </div>
 
       <div
-        className={`event-drawer-overlay ${
-          isComposerOpen || isAboutOpen ? 'event-drawer-overlay--open' : ''
-        }`}
+        className={`event-drawer-overlay ${isComposerOpen || isAboutOpen ? 'event-drawer-overlay--open' : ''}`}
         onClick={() => {
           closeComposer();
+          setActiveEvent(null);
           setIsAboutOpen(false);
           setIsUpcomingOpen(false);
         }}
         aria-hidden={!isComposerOpen && !isAboutOpen}
       />
 
-      <aside
-        className={`event-drawer ${isComposerOpen ? 'event-drawer--open' : ''}`}
-        aria-hidden={!isComposerOpen}
-      >
-        <section className="h-full rounded-r-[28px] border-r border-slate-900/8 bg-white/88 p-6 shadow-[0_24px_70px_rgba(36,52,89,0.18)] backdrop-blur-xl">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                New event
-              </p>
-              <h2 className="m-0 text-3xl font-semibold tracking-tight text-slate-900">
-                Create local event
-              </h2>
-            </div>
-            <button
-              type="button"
-              className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
-              onClick={closeComposer}
-            >
-              Close
-            </button>
-          </div>
+      <EventComposerDrawer
+        isOpen={isComposerOpen}
+        mode={composerMode}
+        draftEvent={draftEvent}
+        draftTag={draftTag}
+        availableTags={availableTags}
+        onClose={closeComposer}
+        onDraftChange={handleDraftChange}
+        onDraftTagChange={handleDraftTagChange}
+        onAddTag={() => handleAddTag(availableTags)}
+        onAddExistingTag={(tag) => {
+          setDraftEvent((current) => {
+            if (current.tags.some((item) => item.label.toLowerCase() === tag.label.toLowerCase())) {
+              return current;
+            }
 
-          <form className="mt-5 grid gap-3" onSubmit={handleCreateEvent}>
-            <label htmlFor="event-title" className="text-sm font-medium text-slate-700">
-              Title
-            </label>
-            <input
-              id="event-title"
-              name="title"
-              type="text"
-              value={draftEvent.title}
-              onChange={handleDraftChange}
-              placeholder="Pairing flow review"
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            />
+            return {
+              ...current,
+              tags: [...current.tags, tag],
+            };
+          });
+        }}
+        onRemoveTag={handleRemoveTag}
+        onSubmit={handleCreateEvent}
+      />
 
-            <label htmlFor="event-date" className="text-sm font-medium text-slate-700">
-              Date
-            </label>
-            <input
-              id="event-date"
-              name="date"
-              type="date"
-              value={draftEvent.date}
-              onChange={handleDraftChange}
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            />
-
-            <label htmlFor="event-time" className="text-sm font-medium text-slate-700">
-              Time
-            </label>
-            <input
-              id="event-time"
-              name="time"
-              type="time"
-              value={draftEvent.time}
-              onChange={handleDraftChange}
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            />
-
-            <div className="mt-2 flex justify-end gap-2.5">
-              <button
-                type="button"
-                onClick={closeComposer}
-                className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-full bg-slate-900 px-4 py-2.5 text-white transition hover:bg-slate-800"
-              >
-                Save event
-              </button>
-            </div>
-          </form>
-        </section>
-      </aside>
-
-      <aside
-        className={`about-drawer ${isAboutOpen ? 'about-drawer--open' : ''}`}
-        aria-hidden={!isAboutOpen}
-      >
-        <section className="h-full overflow-auto rounded-l-[28px] border-l border-slate-900/8 bg-white/92 p-6 shadow-[0_24px_70px_rgba(36,52,89,0.18)] backdrop-blur-xl">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                Learn more
-              </p>
-              <h2 className="m-0 text-3xl font-semibold tracking-tight text-slate-900">
-                About this app
-              </h2>
-            </div>
-            <button
-              type="button"
-              className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
-              onClick={() => setIsAboutOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-
-          <HeroCard
-            platform={window.calendarApp.platform}
-            deviceId={snapshot?.deviceId}
-            changeCount={snapshot?.stats?.changeCount || 0}
-            activeEventCount={snapshot?.stats?.activeEventCount || 0}
-          />
-        </section>
-      </aside>
+      <AboutDrawer
+        isOpen={isAboutOpen}
+        onClose={() => setIsAboutOpen(false)}
+        platform={window.calendarApp.platform}
+        deviceId={snapshot?.deviceId}
+        changeCount={snapshot?.stats?.changeCount || 0}
+        activeEventCount={snapshot?.stats?.activeEventCount || 0}
+      />
     </>
   );
 }

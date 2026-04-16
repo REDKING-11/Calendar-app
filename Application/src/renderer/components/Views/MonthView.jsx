@@ -3,11 +3,27 @@ import { WEEKDAY_LABELS, buildMonthTiles } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 
+function formatEventPreview(event) {
+  const firstTag = event.tags?.[0]?.label;
+  const typePrefix =
+    event.type === 'task'
+      ? event.completed
+        ? 'Done: '
+        : 'Task: '
+      : event.type === 'appointment'
+        ? 'Appointment: '
+        : '';
+  const titleBase = event.completed ? `${event.title} (done)` : event.title;
+  const title = firstTag ? `${firstTag}: ${titleBase}` : titleBase;
+  return `${typePrefix}${title}`;
+}
+
 export default function MonthView({
   events,
   onCreateEvent,
   selectedDate,
   onSelectDate,
+  onSelectEvent,
   calendarView,
   onChangeView,
 }) {
@@ -90,13 +106,15 @@ export default function MonthView({
 
             <div className="calendar-event-list">
               {tile.events.map((event) => (
-                <p
+                <button
                   key={event.id}
+                  type="button"
                   className="calendar-event-pill"
                   style={{ backgroundColor: event.color || '#4f9d69' }}
+                  onClick={() => onSelectEvent?.(event)}
                 >
-                  {event.title}
-                </p>
+                  {formatEventPreview(event)}
+                </button>
               ))}
             </div>
           </article>

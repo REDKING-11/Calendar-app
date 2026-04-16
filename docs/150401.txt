@@ -1,112 +1,226 @@
-Here’s the full picture of what I changed across this chat, grouped by area so it’s easier to follow.
+**1. Electron / Forge / Startup Fixes**
+I fixed the app’s early startup problems:
+- corrected the Electron `main` entry when it was pointing at the wrong file
+- moved the app into a proper Electron Forge + React structure
+- fixed preload path issues caused by the apostrophe in the project path
+- adjusted Forge ports to avoid collisions
+- helped diagnose stopped startup cases caused by occupied ports
 
-**App Setup And Project Structure**
-I helped turn the project into a proper Electron Forge + React app shape. That included fixing startup issues where Electron was pointing at the wrong main file, fixing Forge/Webpack setup, and cleaning up problems caused by the project path containing an apostrophe. I also adjusted the Forge ports to avoid collisions, and later added Tailwind support so you could use utility classes directly in the renderer.
+Main setup files involved:
+- [package.json](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\package.json:1)
+- [forge.config.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\forge.config.js:1)
+- [src/main.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\main.js:1)
+- [src/preload.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\preload.js:1)
 
-I also reorganized the renderer structure over time:
-- split top-level UI into clearer components
-- removed and reintroduced `App.jsx` based on your preference
-- moved the month view logic out of the old [Calender-tiles.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Calender-tiles.jsx) and into [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
-- grouped views under [components/Views](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views)
-- split the old introduction/header responsibilities into [Header.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Header.jsx:1) and [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
+**2. Local-First Data Foundation**
+I started the local-first architecture by adding a real local data store and change log:
+- current local state for events
+- append-only change log for future syncing
+- IPC bridge so the renderer can read/write calendar data safely
 
-**Local-First Data Layer**
-I started the local-first core you described. The app now has a local persisted store plus an append-only change log instead of being just a mock UI. That work lives in:
+Files added for that:
 - [calendar-store.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\data\calendar-store.js:1)
 - [calendar-ipc.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\ipc\calendar-ipc.js:1)
-- [main.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\main.js:1)
-- [preload.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\preload.js:1)
 
-That made the app store real local events, expose snapshot/event APIs through IPC, and create a base for future sync.
+That means the UI is no longer just demo data; it has a persistent local data layer.
 
-**Renderer And Event Creation**
-I wired the renderer to load the local snapshot and use real event data instead of placeholders. I also replaced the unsupported `prompt()` flow with a proper in-app event form. Then I moved that event form into a left-side slide-out drawer with stylesheet-driven animation, overlay, and later preserved it while the rest of the layout evolved.
+**3. Renderer / Event Creation Flow**
+I rewired the renderer to use the local snapshot and real event creation instead of placeholder UI:
+- replaced unsupported `prompt()` event creation
+- added a real event form
+- moved that form into a left slide-out drawer
+- kept that drawer as the primary create/edit interaction
 
-That work mainly touched:
+Main file:
 - [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+
+**4. Tailwind Support**
+I added Tailwind support to the Electron renderer so you can use utility classes:
+- PostCSS/Tailwind integration
+- renderer webpack CSS pipeline update
+
+Files involved:
+- [webpack.renderer.config.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\webpack.renderer.config.js:1)
+- [postcss.config.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\postcss.config.js:1)
 - [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
 
-**Month View**
-I built the real month grid logic so the calendar tiles show actual days, spillover days from adjacent months, today highlighting, and events inside the tiles. Then I changed the layout so weekday labels only render once in a separate header row, and the month grid became fixed to 5 rows when you asked for that.
+**5. App Structure Cleanup**
+I reorganized the renderer to make it easier to grow:
+- split header and intro/setup responsibilities
+- moved the month screen out of the old `Calender-tiles` component
+- grouped views into a `Views` folder
+- standardized the app around clearer component responsibilities
 
-Later I extracted that whole view into [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1), and then moved its header to the shared header system.
+Key files:
+- [Header.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Header.jsx:1)
+- [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [YearView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\YearView.jsx:1)
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
 
-The date-generation helpers live in:
+**6. Month View**
+I built a real month grid:
+- generates correct calendar tiles for the current month
+- includes spillover days from adjacent months
+- shows the correct month/day numbers
+- shows weekday labels only once across the top
+- later extracted the month screen into its own view component
+
+Logic is shared through:
 - [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
 
-**Week View**
-I added a proper week view, then upgraded it into a real vertical timeline with hours down the side and event blocks positioned by their real start/end time. I also added right-click creation on week slots so you can create events at a chosen hour directly from the grid.
+**7. Week View**
+I added a proper week view and later turned it into a timeline layout:
+- hours down the side
+- 7 day columns
+- events positioned by actual time
+- right-click to create events on time slots
+- later cleaned up the week title formatting to show a proper range like `Apr 13-19, 2026`
 
-That mostly lives in:
+Main file:
 - [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
 
-**Year View**
-I first added a year view with month cards and event counts. After that, you asked for a more Google-like year layout, so I changed it into a true 12-month mini-calendar grid where each month shows all its days in a compact matrix. I also kept the count visible next to the month name.
+**8. Year View**
+I added a year view, then reshaped it to match the compact year-grid style you wanted:
+- all 12 months shown at once
+- each month rendered as a mini calendar grid
+- event count shown near the month title
+- clicking a month still jumps into that month
 
-That lives in:
+Main files:
 - [YearView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\YearView.jsx:1)
 - [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
 
-**Day View**
-I added a dedicated day view with a vertical time grid and minute-aware event placement. Then I iterated on it a lot:
-- added right-click creation on visible slots
-- added zoom
-- changed zoom from endless scaling to fixed useful levels
-- removed the pointless 1-minute zoom
+**9. Day View**
+I added a dedicated day view and then iterated on it heavily:
+- vertical timeline
+- minute-aware event placement
+- right-click event creation
+- zoomable time detail
+- then improved zoom behavior so it stopped feeling random
+
+Day view work included:
+- fixed zoom levels instead of endless zooming
+- removed the useless 1-minute zoom
 - moved zoom into a right-side vertical rail
 - made the zoom rail sticky while scrolling
-- added `Ctrl + wheel` zoom centered around the hovered time
+- kept `Ctrl + wheel` zoom interaction
+- kept the right-side zoom level buttons
 
-That all lives mainly in:
+Main files:
 - [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
 - [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
 
-**Header And Navigation Hierarchy**
-You gave a detailed hierarchy direction, and I refactored the calendar headers around that:
-- row 1 = `Today`, arrows, centered title, `Add event`
-- row 2 = centered view picker, secondary actions on the right
-- only Day keeps the large hero title
-- Week / Month / Year use calmer title sizes
+**10. Upcoming / About / Popup Flows**
+I improved clutter and usability by moving things out of the main workspace:
+- `Upcoming` became a popup
+- `About this app` became its own side drawer
+- the old bottom `Day schedule` block got turned into a popup instead of wasting page space
 
-Then I centered both:
-- the `Day / Week / Month / Year` picker
-- the actual page title text
+This mostly lives in:
+- [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
 
-Later I centralized the repeated view-header markup into:
-- [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+**11. User Name / Timezone**
+I improved the intro/setup form so it’s more practical:
+- timezone auto-detection using real IANA names
+- name and timezone stored in local storage
+- used later for the “Hey {name}” schedule greeting
 
-So now changing the header layout is much easier in one place instead of editing all four views manually.
-
-**Upcoming / About / Day Schedule**
-I changed `Upcoming` from a large in-page section into a popup panel, and moved “About this app” into its own right-side drawer. Then later I removed the bulky `Day schedule` block at the bottom of day view and turned it into a popup button.
-
-After that, because you wanted it available everywhere, I centralized that popup into:
-- [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
-
-Now `Today’s schedule` appears in Day, Week, Month, and Year, and always shows today’s actual events no matter which view you’re in.
-
-**Introduction / User Name / Timezone**
-I updated the intro form so timezone is detected properly using real IANA timezones instead of hardcoded UTC offsets. Then I made the form save `name` and `timezone` into local storage so the schedule popup can greet the user by name.
-
-That work is in:
+Main file:
 - [introduction.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\introduction.jsx:1)
 
-**Styling**
-A lot of the work was also in [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1), where I added:
-- Tailwind entry setup
-- calendar grid styles
+**12. Header Hierarchy Refactor**
+You gave a strong direction for header hierarchy, and I applied that:
+- row 1: navigation + centered title + `Add event`
+- row 2: centered view picker + secondary control on the right
+- only Day view gets the big hero title
+- Week / Month / Year use calmer title sizes
+
+I also later centered:
+- the `Day / Week / Month / Year` switcher
+- the actual date/month/year title text
+
+This styling/layout work is mainly in:
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+**13. Shared / Centralized Calendar Header**
+At first the header structure was duplicated in each view file. I centralized it into:
+- [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+
+That now owns:
+- `Today`, `<`, `>`
+- centered title block
+- `Add event`
+- `Day / Week / Month / Year`
+- secondary action slot
+
+So changing the calendar header no longer means editing four separate files.
+
+**14. Shared / Centralized Today’s Schedule**
+Originally `Today’s schedule` only existed in Day view. Then I made it shared and visible everywhere by centralizing it into:
+- [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+That now:
+- shows in Day, Week, Month, and Year
+- always shows today’s actual events
+- greets with the saved user name if available
+- shows start of day, end of day, and today’s items
+- is styled from one place and reused in all views
+
+Views using it now:
+- [DayView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\DayView.jsx:1)
+- [WeekView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\WeekView.jsx:1)
+- [MonthView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\MonthView.jsx:1)
+- [YearView.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\YearView.jsx:1)
+
+**15. Styling / CSS**
+A lot of the visual and layout behavior lives in:
+- [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+That file now contains:
+- base glassy card styling
+- month grid styles
 - week/day timeline styles
-- drawer and overlay animations
-- popup styles
 - zoom rail styles
+- popup styling
 - shared calendar header layout
-- responsive behavior for the reorganized headers
+- centered switcher and centered title logic
+- sticky/floating controls
+- responsive layout rules
 
-**What’s Centralized Now**
-If you want to customize key shared pieces, the main centralized places are:
-- shared calendar header: [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
-- shared “Today’s schedule” popup: [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
-- shared calendar date/grid helpers: [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
-- shared styling/layout rules: [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+**16. What Is Centralized Now**
+If you want to customize the app later, the main centralized places are:
 
-If you want, I can do the next step and make you a short “project map” of which file controls what, so customizing this later is much easier.
+- calendar header structure:
+  [CalendarViewHeader.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\CalendarViewHeader.jsx:1)
+
+- today schedule popup:
+  [TodayScheduleControl.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\Views\TodayScheduleControl.jsx:1)
+
+- calendar math/date generation:
+  [calendar-helpers.js](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\components\calendar-helpers.js:1)
+
+- shared renderer styling:
+  [styles.css](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\styles.css:1)
+
+- overall renderer composition:
+  [renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Calendar-app\Application\src\renderer\renderer.jsx:1)
+
+**17. Verification**
+Along the way I repeatedly ran compile-level checks on the updated JSX files after major refactors:
+- view extraction
+- year mini-grid
+- day view
+- zoom logic
+- shared header
+- shared today schedule control
+
+So most of the structural changes were validated at the code/transpile level, not just patched blindly.
+
+If you want, I can also turn this into a “file map” next, like:
+- “edit this file if you want to change titles”
+- “edit this file if you want to change schedule popup”
+- “edit this file if you want to change month math”
+which would make future customization much easier.
