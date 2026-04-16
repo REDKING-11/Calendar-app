@@ -52,6 +52,11 @@ export default function MonthView({
     }
   }, [selectedDate]);
 
+  const handleTileClick = (date) => {
+    onSelectDate?.(date);
+    onCreateEvent?.(date);
+  };
+
   return (
     <section className="calendar-card relative flex h-full min-h-0 flex-col rounded-[28px] border border-slate-900/8 bg-white/70 p-5 shadow-[0_24px_70px_rgba(36,52,89,0.12)] backdrop-blur-md">
       <CalendarViewHeader
@@ -88,13 +93,14 @@ export default function MonthView({
             ]
               .filter(Boolean)
               .join(' ')}
+            onClick={() => handleTileClick(tile.date)}
           >
             <button
               type="button"
               className="calendar-tile-date-button"
-              onClick={() => {
-                onSelectDate?.(tile.date);
-                onCreateEvent?.(tile.date);
+              onClick={(event) => {
+                event.stopPropagation();
+                handleTileClick(tile.date);
               }}
             >
               <p className="calendar-tile-date">
@@ -111,7 +117,10 @@ export default function MonthView({
                   type="button"
                   className="calendar-event-pill"
                   style={{ backgroundColor: event.color || '#4f9d69' }}
-                  onClick={() => onSelectEvent?.(event)}
+                  onClick={(clickEvent) => {
+                    clickEvent.stopPropagation();
+                    onSelectEvent?.(event);
+                  }}
                 >
                   {formatEventPreview(event)}
                 </button>

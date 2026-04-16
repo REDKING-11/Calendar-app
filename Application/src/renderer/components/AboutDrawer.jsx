@@ -1,5 +1,6 @@
 import React from 'react';
 import HeroCard from './HeroCard';
+import HostedSyncPanel from './HostedSyncPanel';
 
 export default function AboutDrawer({
   isOpen,
@@ -8,6 +9,15 @@ export default function AboutDrawer({
   deviceId,
   changeCount,
   activeEventCount,
+  security,
+  hostedUrl,
+  onHostedUrlChange,
+  onStartHostedConnect,
+  onPollHostedAuth,
+  onSyncHostedNow,
+  onDisconnectHostedSync,
+  hostedBusyAction,
+  hostedStatusMessage,
 }) {
   return (
     <aside className={`about-drawer ${isOpen ? 'about-drawer--open' : ''}`} aria-hidden={!isOpen}>
@@ -35,6 +45,18 @@ export default function AboutDrawer({
           deviceId={deviceId}
           changeCount={changeCount}
           activeEventCount={activeEventCount}
+          security={security}
+        />
+        <HostedSyncPanel
+          hosted={security?.hosted}
+          hostedUrl={hostedUrl}
+          onHostedUrlChange={onHostedUrlChange}
+          onStartConnect={onStartHostedConnect}
+          onPollAuth={onPollHostedAuth}
+          onSyncNow={onSyncHostedNow}
+          onDisconnect={onDisconnectHostedSync}
+          busyAction={hostedBusyAction}
+          statusMessage={hostedStatusMessage}
         />
       </section>
     </aside>

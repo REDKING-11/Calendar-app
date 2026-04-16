@@ -15,7 +15,7 @@ export default function CalendarViewport({
   onSelectMonth,
 }) {
   return (
-    <div className="h-full min-h-0">
+    <div className="h-full min-h-0 min-w-0 overflow-hidden">
       {calendarView === 'day' ? (
         <DayView
           events={events}

@@ -28,7 +28,11 @@ export default function TodayScheduleControl({ events }) {
 
   return (
     <div className="today-schedule-control">
-      <button type="button" onClick={() => setIsOpen((current) => !current)}>
+      <button
+        type="button"
+        className="calendar-header-button"
+        onClick={() => setIsOpen((current) => !current)}
+      >
         Today&apos;s schedule
       </button>
 

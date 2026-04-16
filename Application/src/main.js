@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, safeStorage, shell } = require('electron');
 const { CalendarStore } = require('./data/calendar-store');
 const { registerCalendarHandlers } = require('./ipc/calendar-ipc');
 
@@ -13,10 +13,10 @@ const createWindow = () => {
   );
 
   const mainWindow = new BrowserWindow({
-    width: 1200,
+    width: 1280,
     height: 780,
-    minWidth: 960,
-    minHeight: 640,
+    minWidth: 1278,
+    minHeight: 638,
     backgroundColor: '#f4efe7',
     webPreferences: {
       preload: preloadPath,
@@ -33,7 +33,10 @@ const createWindow = () => {
 };
 
 app.whenReady().then(() => {
-  const store = new CalendarStore(app.getPath('userData'));
+  const store = new CalendarStore(app.getPath('userData'), {
+    safeStorage,
+    shell,
+  });
   registerCalendarHandlers(store);
   createWindow();
 

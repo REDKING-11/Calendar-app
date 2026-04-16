@@ -9,7 +9,7 @@ export default function Header({
   isSetupOpen,
 }) {
   return (
-    <section className="flex w-full flex-col gap-3">
+    <section className="flex w-full min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between w-full gap-3 rounded-3xl border border-slate-900/8 bg-white/70 px-5 py-4 shadow-[0_18px_50px_rgba(36,52,89,0.10)] backdrop-blur-md">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">

@@ -9,41 +9,19 @@ import Introduction from './components/introduction';
 import Sidebar from './components/Sidebar';
 import UpcomingPopover from './components/UpcomingPopover';
 import {
+  endOfMonth,
+  endOfWeek,
+  isSameDay,
+  startOfMonth,
+  startOfWeek,
+} from './components/calendar-helpers';
+import {
   createDraftEventFromEvent,
   createDraftTagId,
   createEmptyDraftEvent,
   createEmptyDraftTag,
 } from './eventDraft';
 import './styles.css';
-
-function isSameDay(left, right) {
-  return (
-    left.getFullYear() === right.getFullYear() &&
-    left.getMonth() === right.getMonth() &&
-    left.getDate() === right.getDate()
-  );
-}
-
-function startOfWeek(date) {
-  const nextDate = new Date(date);
-  nextDate.setHours(0, 0, 0, 0);
-  nextDate.setDate(nextDate.getDate() - nextDate.getDay());
-  return nextDate;
-}
-
-function endOfWeek(date) {
-  const nextDate = startOfWeek(date);
-  nextDate.setDate(nextDate.getDate() + 7);
-  return nextDate;
-}
-
-function startOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function endOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 1);
-}
 
 function getVisibleEventsForView(events, calendarView, selectedDate) {
   if (!selectedDate) {
@@ -132,6 +110,15 @@ function App() {
   const [isUpcomingOpen, setIsUpcomingOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSetupOpen, setIsSetupOpen] = useState(false);
+  const [hostedUrl, setHostedUrl] = useState('');
+  const [hostedBusyAction, setHostedBusyAction] = useState('');
+  const [hostedStatusMessage, setHostedStatusMessage] = useState('');
+
+  const refreshSnapshot = async () => {
+    const nextSnapshot = await window.calendarApp.getSnapshot();
+    setSnapshot(nextSnapshot);
+    return nextSnapshot;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +136,13 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const nextBaseUrl = snapshot?.security?.hosted?.baseUrl;
+    if (!hostedUrl && nextBaseUrl) {
+      setHostedUrl(nextBaseUrl);
+    }
+  }, [snapshot?.security?.hosted?.baseUrl, hostedUrl]);
 
   const allEvents = snapshot?.events || [];
   const availableTags = useMemo(
@@ -360,6 +354,33 @@ function App() {
     setActiveEvent(null);
   };
 
+  const handleHostedAction = async (actionKey, action, successMessage) => {
+    setHostedBusyAction(actionKey);
+    setHostedStatusMessage('');
+
+    try {
+      const nextSnapshot = await action();
+      setSnapshot(nextSnapshot);
+      if (nextSnapshot?.security?.hosted?.baseUrl) {
+        setHostedUrl(nextSnapshot.security.hosted.baseUrl);
+      }
+      if (successMessage) {
+        setHostedStatusMessage(successMessage);
+      }
+    } catch (error) {
+      const fallbackMessage =
+        error?.message || 'The hosted backend action could not be completed.';
+      setHostedStatusMessage(fallbackMessage);
+      try {
+        await refreshSnapshot();
+      } catch (_refreshError) {
+        // Keep the current UI state if the store snapshot cannot be reloaded.
+      }
+    } finally {
+      setHostedBusyAction('');
+    }
+  };
+
   return (
     <>
       <div className="app-shell overflow-hidden">
@@ -383,7 +404,7 @@ function App() {
           }}
         />
 
-        <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
           <Header
             eventCount={snapshot?.stats?.activeEventCount || 0}
             onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
@@ -395,7 +416,7 @@ function App() {
 
           <Introduction isOpen={isSetupOpen} onOpenChange={setIsSetupOpen} />
 
-          <main className="relative min-h-0 flex-1 overflow-hidden">
+          <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
             {isUpcomingOpen ? (
               <UpcomingPopover
                 items={upcomingDays}
@@ -481,6 +502,39 @@ function App() {
         deviceId={snapshot?.deviceId}
         changeCount={snapshot?.stats?.changeCount || 0}
         activeEventCount={snapshot?.stats?.activeEventCount || 0}
+        security={snapshot?.security}
+        hostedUrl={hostedUrl}
+        onHostedUrlChange={setHostedUrl}
+        onStartHostedConnect={(provider) =>
+          handleHostedAction(
+            `connect-${provider}`,
+            () => window.calendarApp.startHostedSyncConnect(hostedUrl, provider),
+            `Browser sign-in opened for ${provider}. Finish the approval in the browser, then come back here.`
+          )
+        }
+        onPollHostedAuth={() =>
+          handleHostedAction(
+            'finish-auth',
+            () => window.calendarApp.pollHostedSyncAuth(),
+            'Hosted sign-in status refreshed.'
+          )
+        }
+        onSyncHostedNow={() =>
+          handleHostedAction(
+            'sync',
+            () => window.calendarApp.syncHostedNow(),
+            'Hosted sync completed.'
+          )
+        }
+        onDisconnectHostedSync={() =>
+          handleHostedAction(
+            'disconnect',
+            () => window.calendarApp.disconnectHostedSync(),
+            'Hosted backend disconnected on this device.'
+          )
+        }
+        hostedBusyAction={hostedBusyAction}
+        hostedStatusMessage={hostedStatusMessage}
       />
     </>
   );

@@ -10,7 +10,7 @@
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "test": "echo \"No tests configured yet\""
+    "test": "node test/run-security-tests.js"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",

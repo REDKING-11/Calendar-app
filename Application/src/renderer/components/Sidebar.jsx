@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { WEEKDAY_LABELS, buildMonthTiles, isSameDay } from './calendar-helpers';
+
+const SIDEBAR_MONTH_SCROLL_LOCK_MS = 140;
 
 export default function Sidebar({
   availableTags,
@@ -18,7 +20,23 @@ export default function Sidebar({
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
   const [isQuickFiltersOpen, setIsQuickFiltersOpen] = useState(true);
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const monthPickerRef = useRef(null);
+  const lastMonthScrollAtRef = useRef(0);
   const tiles = useMemo(() => buildMonthTiles(viewDate, events), [viewDate, events]);
+  const monthOptions = useMemo(
+    () =>
+      Array.from({ length: 12 }, (_, index) => {
+        const date = new Date(viewDate.getFullYear(), index, 1);
+
+        return {
+          key: `${viewDate.getFullYear()}-${index}`,
+          index,
+          label: date.toLocaleDateString('en-US', { month: 'short' }),
+        };
+      }),
+    [viewDate]
+  );
   const tagFilters = useMemo(
     () =>
       (availableTags || []).map((tag) => ({
@@ -45,7 +63,54 @@ export default function Sidebar({
     }
   }, [selectedDate]);
 
+  useEffect(() => {
+    if (!isMonthPickerOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!monthPickerRef.current?.contains(event.target)) {
+        setIsMonthPickerOpen(false);
+      }
+    };
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setIsMonthPickerOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isMonthPickerOpen]);
+
   const hasActiveFilters = searchQuery.trim() || activeTagFilters.length > 0;
+
+  const changeViewMonth = (offset) => {
+    setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  };
+
+  const handleMonthWheel = (event) => {
+    if (event.deltaY === 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const now = Date.now();
+    if (now - lastMonthScrollAtRef.current < SIDEBAR_MONTH_SCROLL_LOCK_MS) {
+      return;
+    }
+
+    lastMonthScrollAtRef.current = now;
+    changeViewMonth(event.deltaY > 0 ? 1 : -1);
+    setIsMonthPickerOpen(false);
+  };
 
   return (
     <aside className="sidebar-shell w-full min-h-0 rounded-[28px] border border-slate-200 bg-white px-4 py-5 text-slate-900 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
@@ -62,25 +127,68 @@ export default function Sidebar({
           <span className="text-sm text-slate-300">New</span>
         </button>
 
-        <div className="mt-10">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-[18px] font-semibold text-slate-900">{monthTitle}</h2>
+        <div className="sidebar-mini-calendar mt-10" onWheel={handleMonthWheel}>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div ref={monthPickerRef} className="sidebar-month-picker-anchor">
+              <button
+                type="button"
+                className="sidebar-month-trigger"
+                onClick={() => setIsMonthPickerOpen((current) => !current)}
+                aria-expanded={isMonthPickerOpen}
+                aria-haspopup="dialog"
+                aria-label={`${monthTitle}. Click to choose a month or use the mouse wheel to move between months.`}
+                title="Click to choose a month or use the mouse wheel to move between months"
+              >
+                <span className="sidebar-month-trigger-label">{monthTitle}</span>
+              </button>
+
+              {isMonthPickerOpen ? (
+                <div
+                  className="sidebar-month-picker"
+                  role="dialog"
+                  aria-label={`Choose month for ${viewDate.getFullYear()}`}
+                >
+                  <p className="sidebar-month-picker-year">{viewDate.getFullYear()}</p>
+                  <div className="sidebar-month-picker-grid">
+                    {monthOptions.map((month) => (
+                      <button
+                        key={month.key}
+                        type="button"
+                        className={[
+                          'sidebar-month-option',
+                          month.index === viewDate.getMonth() ? 'sidebar-month-option--active' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onClick={() => {
+                          setViewDate(
+                            (current) => new Date(current.getFullYear(), month.index, 1)
+                          );
+                          setIsMonthPickerOpen(false);
+                        }}
+                      >
+                        {month.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
             <div className="flex items-center gap-4 text-slate-500">
               <button
                 type="button"
                 className="text-lg transition hover:text-slate-900"
-                onClick={() =>
-                  setViewDate((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))
-                }
+                onClick={() => changeViewMonth(-1)}
+                aria-label="Previous month"
               >
                 {'<'}
               </button>
               <button
                 type="button"
                 className="text-lg transition hover:text-slate-900"
-                onClick={() =>
-                  setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))
-                }
+                onClick={() => changeViewMonth(1)}
+                aria-label="Next month"
               >
                 {'>'}
               </button>

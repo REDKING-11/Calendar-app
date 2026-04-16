@@ -1,4 +1,21 @@
-export const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const BASE_WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function getCurrentTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+export function getWeekStartDayIndex(timeZone = getCurrentTimeZone()) {
+  return timeZone.startsWith('America/') ? 0 : 1;
+}
+
+export const WEEKDAY_LABELS = [
+  ...BASE_WEEKDAY_LABELS.slice(getWeekStartDayIndex()),
+  ...BASE_WEEKDAY_LABELS.slice(0, getWeekStartDayIndex()),
+];
 
 export function startOfMonth(date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -7,15 +24,29 @@ export function startOfMonth(date) {
 export function startOfCalendarGrid(date) {
   const firstDayOfMonth = startOfMonth(date);
   const gridStart = new Date(firstDayOfMonth);
-  gridStart.setDate(firstDayOfMonth.getDate() - firstDayOfMonth.getDay());
+  const weekStartDay = getWeekStartDayIndex();
+  const offset = (firstDayOfMonth.getDay() - weekStartDay + 7) % 7;
+  gridStart.setDate(firstDayOfMonth.getDate() - offset);
   return gridStart;
 }
 
 export function startOfWeek(date) {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - start.getDay());
+  const weekStartDay = getWeekStartDayIndex();
+  const offset = (start.getDay() - weekStartDay + 7) % 7;
+  start.setDate(start.getDate() - offset);
   return start;
+}
+
+export function endOfWeek(date) {
+  const nextDate = startOfWeek(date);
+  nextDate.setDate(nextDate.getDate() + 7);
+  return nextDate;
+}
+
+export function endOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 1);
 }
 
 export function isSameDay(left, right) {
@@ -61,7 +92,7 @@ export function buildWeekDays(selectedDate, events) {
     return {
       key: date.toISOString(),
       date,
-      label: WEEKDAY_LABELS[date.getDay()],
+      label: date.toLocaleDateString('en-US', { weekday: 'short' }),
       events: events.filter((event) => isEventOnDate(event, date)),
       isToday: isSameDay(date, new Date()),
       isSelected: isSameDay(date, selectedDate),
