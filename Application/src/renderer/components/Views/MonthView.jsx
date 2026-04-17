@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { WEEKDAY_LABELS, buildMonthTiles } from '../calendar-helpers';
+import { buildMonthTiles, getWeekdayLabels } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 
@@ -20,6 +20,7 @@ function formatEventPreview(event) {
 
 export default function MonthView({
   events,
+  timeZone,
   onCreateEvent,
   selectedDate,
   onSelectDate,
@@ -28,7 +29,8 @@ export default function MonthView({
   onChangeView,
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
-  const tiles = buildMonthTiles(viewDate, events);
+  const tiles = buildMonthTiles(viewDate, events, timeZone);
+  const weekdayLabels = getWeekdayLabels(timeZone);
   const monthTitle = viewDate.toLocaleDateString('en-US', {
     month: 'long',
     year: 'numeric',
@@ -75,7 +77,7 @@ export default function MonthView({
       />
 
       <div className="calendar-weekdays" aria-hidden="true">
-        {WEEKDAY_LABELS.map((label) => (
+        {weekdayLabels.map((label) => (
           <p key={label} className="calendar-weekday">
             {label}
           </p>

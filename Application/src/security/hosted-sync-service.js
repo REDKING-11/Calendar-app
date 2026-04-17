@@ -1,59 +1,9 @@
-const crypto = require('node:crypto');
+const path = require('node:path');
+
+const { buildSelfHdbEnv } = require('../shared/selfhdb-setup');
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function createId(prefix) {
-  return `${prefix}_${crypto.randomUUID()}`;
-}
-
-function randomToken(byteLength = 32) {
-  return crypto.randomBytes(byteLength).toString('base64url');
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function stableStringify(value) {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-  }
-
-  return `{${Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
-    .join(',')}}`;
-}
-
-function buildSignedRequestPayload({ method, urlPath, timestamp, nonce, body }) {
-  return [
-    String(method || 'GET').toUpperCase(),
-    urlPath || '/',
-    String(timestamp || ''),
-    String(nonce || ''),
-    sha256(stableStringify(body || {})),
-  ].join('\n');
-}
-
-function buildEnvelopePayload(envelope) {
-  return JSON.stringify({
-    deviceId: envelope.deviceId,
-    deviceSequence: envelope.deviceSequence,
-    entity: envelope.entity,
-    entityId: envelope.entityId,
-    operation: envelope.operation,
-    contentPatch: envelope.contentPatch || null,
-    encryptedPatch: envelope.encryptedPatch || null,
-    metadataPatch: envelope.metadataPatch || {},
-    nonce: envelope.nonce,
-    clientTimestamp: envelope.clientTimestamp,
-  });
 }
 
 function parseJson(value, fallback) {
@@ -99,7 +49,6 @@ class HostedSyncService {
     db,
     cryptoService,
     deviceService,
-    shell,
     fetchImpl = fetch,
     onAudit,
     callbacks,
@@ -107,7 +56,6 @@ class HostedSyncService {
     this.db = db;
     this.cryptoService = cryptoService;
     this.deviceService = deviceService;
-    this.shell = shell;
     this.fetchImpl = fetchImpl;
     this.onAudit = onAudit;
     this.callbacks = callbacks || {};
@@ -192,9 +140,6 @@ class HostedSyncService {
           connection_status AS connectionStatus,
           backend_claimed AS backendClaimed,
           enabled_providers_json AS enabledProvidersJson,
-          pending_auth_state AS pendingAuthState,
-          pending_flow_type AS pendingFlowType,
-          pending_auth_expires_at AS pendingAuthExpiresAt,
           account_email AS accountEmail,
           display_name AS displayName,
           session_id AS sessionId,
@@ -231,9 +176,9 @@ class HostedSyncService {
            connection_status = :connectionStatus,
            backend_claimed = :backendClaimed,
            enabled_providers_json = :enabledProvidersJson,
-           pending_auth_state = :pendingAuthState,
-           pending_flow_type = :pendingFlowType,
-           pending_auth_expires_at = :pendingAuthExpiresAt,
+           pending_auth_state = NULL,
+           pending_flow_type = NULL,
+           pending_auth_expires_at = NULL,
            account_email = :accountEmail,
            display_name = :displayName,
            session_id = :sessionId,
@@ -258,13 +203,10 @@ class HostedSyncService {
     return {
       enabled: Boolean(row?.baseUrl),
       baseUrl: row?.baseUrl || '',
-      provider: row?.provider || null,
+      authMode: row?.provider || null,
       connectionStatus: row?.connectionStatus || 'disconnected',
       backendClaimed: Boolean(row?.backendClaimed),
       enabledProviders: parseJson(row?.enabledProvidersJson, []),
-      pendingAuthState: row?.pendingAuthState || null,
-      pendingFlowType: row?.pendingFlowType || null,
-      pendingAuthExpiresAt: row?.pendingAuthExpiresAt || null,
       accountEmail: row?.accountEmail || null,
       displayName: row?.displayName || null,
       sessionId: row?.sessionId || null,
@@ -311,7 +253,7 @@ class HostedSyncService {
     return text ? { message: text } : {};
   }
 
-  async requestJson({ method = 'GET', baseUrl, path, body, accessToken, signed }) {
+  async requestJson({ method = 'GET', baseUrl, path: urlPath, body, accessToken }) {
     const headers = {
       Accept: 'application/json',
     };
@@ -324,24 +266,7 @@ class HostedSyncService {
       headers.Authorization = `Bearer ${accessToken}`;
     }
 
-    if (signed) {
-      const timestamp = nowIso();
-      const nonce = randomToken(16);
-      const payload = buildSignedRequestPayload({
-        method,
-        urlPath: path,
-        timestamp,
-        nonce,
-        body: body || {},
-      });
-
-      headers['X-Device-Id'] = signed.deviceId;
-      headers['X-Request-Timestamp'] = timestamp;
-      headers['X-Request-Nonce'] = nonce;
-      headers['X-Request-Signature'] = this.deviceService.signPayload(payload);
-    }
-
-    const response = await this.fetchImpl(`${baseUrl}${path}`, {
+    const response = await this.fetchImpl(`${baseUrl}${urlPath}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -358,148 +283,176 @@ class HostedSyncService {
       throw error;
     }
 
-    return payload;
+    return payload?.result ?? payload;
   }
 
-  async startAuth(provider, baseUrl) {
+  buildDevicePayload(deviceLabel) {
+    const localDevice = this.deviceService.getLocalDeviceProfile();
+
+    return {
+      id: localDevice.deviceId,
+      name: String(deviceLabel || localDevice.label || '').trim() || localDevice.label,
+      type: 'desktop',
+    };
+  }
+
+  resetSessionState(baseUrl, authMode, enabledProviders, backendClaimed) {
+    return this.updateState({
+      baseUrl,
+      provider: authMode || null,
+      connectionStatus: baseUrl ? 'configured' : 'disconnected',
+      backendClaimed: backendClaimed ? 1 : 0,
+      enabledProvidersJson: JSON.stringify(enabledProviders || []),
+      accountEmail: null,
+      displayName: null,
+      sessionId: null,
+      accessTokenCipherText: null,
+      refreshTokenCipherText: null,
+      accessTokenExpiresAt: null,
+      refreshTokenExpiresAt: null,
+      serverCursor: 0,
+      lastPushedSequence: 0,
+      lastSyncedAt: null,
+      lastError: null,
+    });
+  }
+
+  async testConnection(baseUrl) {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    const health = await this.requestJson({
+      method: 'GET',
+      baseUrl: normalizedBaseUrl,
+      path: '/v1/health',
+    });
     const bootstrap = await this.requestJson({
       method: 'GET',
       baseUrl: normalizedBaseUrl,
       path: '/v1/bootstrap/status',
     });
 
-    if (!Array.isArray(bootstrap.enabledProviders) || !bootstrap.enabledProviders.includes(provider)) {
-      throw new Error(`${provider} is not enabled on this backend.`);
+    if (!Array.isArray(bootstrap.enabledProviders) || !bootstrap.enabledProviders.includes('password')) {
+      throw new Error('This backend does not advertise password sign-in support.');
     }
 
-    const localDevice = this.deviceService.getLocalDeviceProfile();
-    const currentState = this.getState();
-    const resetSyncCursors = currentState.baseUrl && currentState.baseUrl !== normalizedBaseUrl;
+    this.resetSessionState(
+      normalizedBaseUrl,
+      bootstrap.authMode || 'local_password',
+      bootstrap.enabledProviders,
+      bootstrap.claimed
+    );
 
-    const flow = await this.requestJson({
-      method: 'POST',
-      baseUrl: normalizedBaseUrl,
-      path: `/v1/auth/${provider}/start`,
-      body: {
-        deviceId: localDevice.deviceId,
-        deviceLabel: localDevice.label,
-        devicePublicKey: localDevice.publicKey,
-      },
-    });
-
-    this.updateState({
-      baseUrl: normalizedBaseUrl,
-      provider,
-      connectionStatus: 'pending_auth',
-      backendClaimed: bootstrap.claimed ? 1 : 0,
-      enabledProvidersJson: JSON.stringify(bootstrap.enabledProviders || []),
-      pendingAuthState: flow.state,
-      pendingFlowType: flow.flowType,
-      pendingAuthExpiresAt: flow.expiresAt,
-      accessTokenCipherText: null,
-      refreshTokenCipherText: null,
-      accessTokenExpiresAt: null,
-      refreshTokenExpiresAt: null,
-      sessionId: null,
-      lastError: null,
-      accountEmail: null,
-      displayName: null,
-      ...(resetSyncCursors
-        ? {
-            serverCursor: 0,
-            lastPushedSequence: 0,
-            lastSyncedAt: null,
-          }
-        : {}),
-    });
-
-    this.onAudit?.('hosted_auth_started', {
+    this.onAudit?.('hosted_connection_verified', {
       targetType: 'hosted_backend',
       targetId: normalizedBaseUrl,
       details: {
-        provider,
-        flowType: flow.flowType,
+        authMode: bootstrap.authMode || 'local_password',
+        status: health.status || 'ok',
       },
     });
 
-    if (this.shell?.openExternal) {
-      await this.shell.openExternal(flow.authorizationUrl);
-    }
-
     return {
       hosted: this.getState(),
-      flow,
+      health,
+      bootstrap,
     };
   }
 
-  async pollAuthFlow() {
-    const state = this.getState();
-    if (!state.baseUrl || !state.pendingAuthState) {
-      throw new Error('There is no pending hosted sign-in flow.');
-    }
+  storeAuthenticatedSession(baseUrl, sessionResult, authMode = 'local_password') {
+    const latestCursor = Number(sessionResult?.syncState?.serverCursor || 0);
 
+    this.updateState({
+      baseUrl,
+      provider: authMode,
+      connectionStatus: 'connected',
+      backendClaimed: 1,
+      enabledProvidersJson: JSON.stringify(['password']),
+      accountEmail: sessionResult?.user?.email || null,
+      displayName: sessionResult?.device?.name || null,
+      sessionId: sessionResult?.sessionId || null,
+      accessTokenCipherText: this.cryptoService.encryptText(
+        sessionResult.accessToken,
+        'hosted-sync:access-token'
+      ),
+      refreshTokenCipherText: this.cryptoService.encryptText(
+        sessionResult.refreshToken,
+        'hosted-sync:refresh-token'
+      ),
+      accessTokenExpiresAt: sessionResult.accessTokenExpiresAt || null,
+      refreshTokenExpiresAt: sessionResult.refreshTokenExpiresAt || null,
+      serverCursor: latestCursor,
+      lastError: null,
+    });
+  }
+
+  async register({ baseUrl, email, password, deviceName }) {
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    await this.testConnection(normalizedBaseUrl);
     const result = await this.requestJson({
-      method: 'GET',
-      baseUrl: state.baseUrl,
-      path: `/v1/auth/flows/${encodeURIComponent(state.pendingAuthState)}`,
+      method: 'POST',
+      baseUrl: normalizedBaseUrl,
+      path: '/v1/auth/register',
+      body: {
+        email,
+        password,
+        device: this.buildDevicePayload(deviceName),
+      },
     });
 
-    if (result.status === 'completed' && result.result?.session) {
-      this.updateState({
-        connectionStatus: 'connected',
-        pendingAuthState: null,
-        pendingFlowType: null,
-        pendingAuthExpiresAt: null,
-        accountEmail: result.result.user?.email || null,
-        displayName: result.result.user?.displayName || null,
-        sessionId: result.result.session.sessionId,
-        accessTokenCipherText: this.cryptoService.encryptText(
-          result.result.session.accessToken,
-          'hosted-sync:access-token'
-        ),
-        refreshTokenCipherText: this.cryptoService.encryptText(
-          result.result.session.refreshToken,
-          'hosted-sync:refresh-token'
-        ),
-        accessTokenExpiresAt: result.result.session.accessTokenExpiresAt,
-        refreshTokenExpiresAt: result.result.session.refreshExpiresAt,
-        lastError: null,
-      });
+    this.storeAuthenticatedSession(normalizedBaseUrl, result);
 
-      this.onAudit?.('hosted_auth_completed', {
-        targetType: 'hosted_backend',
-        targetId: state.baseUrl,
-        details: {
-          provider: state.provider,
-          accountEmail: result.result.user?.email || null,
-        },
-      });
-    } else if (result.status === 'failed') {
-      this.updateState({
-        connectionStatus: state.baseUrl ? 'configured' : 'disconnected',
-        pendingAuthState: null,
-        pendingFlowType: null,
-        pendingAuthExpiresAt: null,
-        lastError: result.errorCode || 'Hosted sign-in failed.',
-      });
-    }
+    this.onAudit?.('hosted_auth_registered', {
+      targetType: 'hosted_backend',
+      targetId: normalizedBaseUrl,
+      details: {
+        accountEmail: result?.user?.email || null,
+      },
+    });
 
     return {
       hosted: this.getState(),
-      flow: result,
+      result,
+    };
+  }
+
+  async login({ baseUrl, email, password, deviceName }) {
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    await this.testConnection(normalizedBaseUrl);
+    const result = await this.requestJson({
+      method: 'POST',
+      baseUrl: normalizedBaseUrl,
+      path: '/v1/auth/login',
+      body: {
+        email,
+        password,
+        device: this.buildDevicePayload(deviceName),
+      },
+    });
+
+    this.storeAuthenticatedSession(normalizedBaseUrl, result);
+
+    this.onAudit?.('hosted_auth_logged_in', {
+      targetType: 'hosted_backend',
+      targetId: normalizedBaseUrl,
+      details: {
+        accountEmail: result?.user?.email || null,
+      },
+    });
+
+    return {
+      hosted: this.getState(),
+      result,
     };
   }
 
   async refreshSession() {
-    const currentState = this.getState();
+    const state = this.getState();
     const tokens = this.getStoredTokens();
 
     if (!tokens.baseUrl || !tokens.refreshToken) {
       throw new Error('Hosted backend refresh token is missing.');
     }
 
-    const session = await this.requestJson({
+    const result = await this.requestJson({
       method: 'POST',
       baseUrl: tokens.baseUrl,
       path: '/v1/auth/refresh',
@@ -508,25 +461,14 @@ class HostedSyncService {
       },
     });
 
-    this.updateState({
-      connectionStatus: 'connected',
-      sessionId: session.sessionId,
-      accessTokenCipherText: this.cryptoService.encryptText(
-        session.accessToken,
-        'hosted-sync:access-token'
-      ),
-      refreshTokenCipherText: this.cryptoService.encryptText(
-        session.refreshToken,
-        'hosted-sync:refresh-token'
-      ),
-      accessTokenExpiresAt: session.accessTokenExpiresAt,
-      refreshTokenExpiresAt: session.refreshExpiresAt,
-      lastError: null,
-      provider: currentState.provider,
-      baseUrl: currentState.baseUrl,
+    this.storeAuthenticatedSession(tokens.baseUrl, {
+      ...result,
+      user: result.user || { email: state.accountEmail },
+      device: result.device || { name: state.displayName },
+      syncState: { serverCursor: state.serverCursor },
     });
 
-    return session.accessToken;
+    return result.accessToken;
   }
 
   async ensureAccessToken() {
@@ -550,11 +492,13 @@ class HostedSyncService {
     if (refreshExpiry && refreshExpiry <= Date.now()) {
       this.updateState({
         connectionStatus: state.baseUrl ? 'configured' : 'disconnected',
+        accountEmail: null,
+        displayName: null,
+        sessionId: null,
         accessTokenCipherText: null,
         refreshTokenCipherText: null,
         accessTokenExpiresAt: null,
         refreshTokenExpiresAt: null,
-        sessionId: null,
         lastError: 'Hosted backend session expired. Sign in again.',
       });
       throw new Error('Hosted backend session expired. Sign in again.');
@@ -596,14 +540,11 @@ class HostedSyncService {
         });
       }
     } catch (_error) {
-      // The local disconnect path should still succeed even if the remote session is already gone.
+      // Local disconnect should still succeed even if the remote session is already gone.
     }
 
     this.updateState({
       connectionStatus: baseUrl ? 'configured' : 'disconnected',
-      pendingAuthState: null,
-      pendingFlowType: null,
-      pendingAuthExpiresAt: null,
       accountEmail: null,
       displayName: null,
       sessionId: null,
@@ -637,11 +578,21 @@ class HostedSyncService {
 
     if (firstSync) {
       this.callbacks.prepareHostedBootstrap?.();
+      const bootstrap = await this.authorizedRequest({
+        method: 'POST',
+        path: '/v1/sync/bootstrap',
+        body: {},
+      });
+      this.updateState({
+        serverCursor: Number(bootstrap?.serverCursor || 0),
+        lastError: null,
+      });
     }
 
+    const latestState = this.getState();
     const initialPull = await this.authorizedRequest({
       method: 'GET',
-      path: `/v1/sync/pull?since=${encodeURIComponent(state.serverCursor)}`,
+      path: `/v1/sync/pull?cursor=${encodeURIComponent(latestState.serverCursor)}`,
     });
 
     let appliedRemote = 0;
@@ -654,40 +605,33 @@ class HostedSyncService {
       appliedRemote += 1;
     }
 
-    let nextCursor = Number(initialPull.nextCursor || state.serverCursor || 0);
-    const localEnvelopes = this.callbacks.listEnvelopesSince?.(state.lastPushedSequence) || [];
+    let nextCursor = Number(
+      initialPull.latestServerCursor || initialPull.serverCursor || latestState.serverCursor || 0
+    );
+    const localEnvelopes = this.callbacks.listEnvelopesSince?.(latestState.lastPushedSequence) || [];
     let pushedCount = 0;
-    let duplicateCount = 0;
-    let lastPushedSequence = state.lastPushedSequence;
+    let lastPushedSequence = latestState.lastPushedSequence;
 
     if (localEnvelopes.length > 0) {
-      const signedEnvelopes = localEnvelopes.map((envelope) => ({
-        ...envelope,
-        signature: this.deviceService.signPayload(buildEnvelopePayload(envelope)),
-        signatureKeyId: localDevice.deviceId,
-      }));
-
       const pushResult = await this.authorizedRequest({
         method: 'POST',
         path: '/v1/sync/push',
         body: {
-          envelopes: signedEnvelopes,
-        },
-        signed: {
-          deviceId: localDevice.deviceId,
+          envelopes: localEnvelopes,
         },
       });
 
-      pushedCount = pushResult.accepted?.length || 0;
-      duplicateCount = pushResult.duplicates?.length || 0;
+      pushedCount = Number(pushResult.acceptedCount || 0);
       lastPushedSequence = Math.max(
-        state.lastPushedSequence,
-        ...signedEnvelopes.map((envelope) => Number(envelope.deviceSequence || 0))
+        latestState.lastPushedSequence,
+        ...localEnvelopes.map((envelope) => Number(envelope.deviceSequence || 0))
       );
 
       const secondPull = await this.authorizedRequest({
         method: 'GET',
-        path: `/v1/sync/pull?since=${encodeURIComponent(nextCursor)}`,
+        path: `/v1/sync/pull?cursor=${encodeURIComponent(
+          pushResult.latestServerCursor || nextCursor
+        )}`,
       });
 
       for (const envelope of secondPull.envelopes || []) {
@@ -699,7 +643,9 @@ class HostedSyncService {
         appliedRemote += 1;
       }
 
-      nextCursor = Number(secondPull.nextCursor || nextCursor || 0);
+      nextCursor = Number(
+        secondPull.latestServerCursor || pushResult.latestServerCursor || nextCursor || 0
+      );
     }
 
     this.updateState({
@@ -715,7 +661,6 @@ class HostedSyncService {
       targetId: state.baseUrl,
       details: {
         pushedCount,
-        duplicateCount,
         pulledCount: appliedRemote,
         serverCursor: nextCursor,
       },
@@ -725,18 +670,22 @@ class HostedSyncService {
       hosted: this.getState(),
       sync: {
         pushedCount,
-        duplicateCount,
         pulledCount: appliedRemote,
         serverCursor: nextCursor,
       },
     };
   }
+
+  buildEnvFile(values) {
+    return buildSelfHdbEnv(values);
+  }
+
+  buildDefaultEnvFilename() {
+    return path.join(process.cwd(), '.env');
+  }
 }
 
 module.exports = {
   HostedSyncService,
-  buildSignedRequestPayload,
-  buildEnvelopePayload,
   normalizeBaseUrl,
-  stableStringify,
 };

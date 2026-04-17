@@ -1,0 +1,220 @@
+**UI fixes**
+I fixed the oversized date in the compact/minimum window state for day view by tightening the day-view title styling so it scales down the same way the other views already did.
+
+I removed the broken extra `(day: 19)` text from week view by changing how the week title string is built, so it shows a clean date range instead of the malformed locale output.
+
+**Timezone and setup behavior**
+I fixed the quick setup timezone issue where saving a timezone did not actually update the visible app state. The root problem was that the UI was still showing the system timezone instead of the saved one. I changed the app so the saved timezone is held in app state and used immediately after save, while still loading from storage on refresh.
+
+I also extended the calendar logic so week-start behavior follows the saved timezone rules across the calendar helpers and views.
+
+**Country-based holidays**
+I added country support to setup so the app can seed public holidays for the selected country.
+
+Then I expanded onboarding behavior so country becomes meaningful:
+- country is saved
+- holiday seeding can happen for current year and next year
+- the calendar can treat holidays as default seeded entries
+- duplicate protection is kept so repeated saves do not keep duplicating them
+
+Because the app did not yet have true all-day holiday handling, imported holidays were represented as short visible events so they would still show up in the interface.
+
+**First-launch onboarding improvements**
+I planned and then implemented a first-launch onboarding flow so the app can open into setup instead of just dropping users straight into the app.
+
+That setup was changed to:
+- ask for country first
+- then timezone
+- explain why both are asked
+- keep them optional
+- allow skipping
+- start background holiday preparation as soon as a country is chosen
+
+I also added country-first timezone filtering using a local country-to-timezone mapping, so choosing a country narrows the timezone list.
+
+**Holiday import reliability**
+When the holiday API failed, the app was crashing with `Failed to fetch`. I changed the setup/save flow so:
+- settings still save
+- holiday failure becomes a warning
+- the app does not crash
+- the setup flow can continue
+
+After that, I broadened holiday coverage by moving holiday resolution into a hybrid provider system:
+- primary source: `date-holidays`
+- fallback source: Nager.Date
+
+That work moved holiday logic out of the renderer and into the main/store side so the renderer no longer directly fetched holiday data for the main import flow. I added IPC and preload support for that.
+
+I also added a small attribution note for the holiday dataset licensing.
+
+**Tag management**
+You asked about the duplicate holiday tags. I explained that `Holiday` was the generic tag and the country-specific tag like `FI Holiday` was there so the system could track which country seeded the holiday.
+
+Then I implemented middle-click management for tags in the quick filters/sidebar so middle mouse opens actions to:
+- rename tag everywhere
+- delete tag everywhere
+
+That system-wide behavior updates all events using the tag and keeps active filters in sync.
+
+After that, you reported middle mouse was triggering browser/Electron autoscroll instead of the menu. I adjusted the interaction so the tag menu intercepts middle mouse earlier in the event flow.
+
+Then I added stronger delete warnings:
+- first as visible warning text
+- then changed it into a proper alert-style warning element with `role="alert"`
+- kept the confirmation dialog too
+
+So deleting a tag now has both inline warning and explicit confirmation.
+
+**App reset explanation**
+You asked how to reset the app memory to see first launch again. I explained that the app data lives in Electron `userData`, including:
+- `calendar-data.db`
+- possible JSON/legacy files
+- localStorage-backed setup values
+
+I explained that deleting the app’s userData folder would reset it to first-launch behavior.
+
+**SelfHdb backend planning and implementation**
+You then shifted into backend architecture for `SelfHdb`, the optional hosted backend.
+
+I first helped shape the backend plan around:
+- PHP
+- MySQL / MariaDB
+- REST API
+- JSON responses
+- cPanel/shared hosting deployment
+- HTTPS-only production
+- local-first desktop app with optional hosted mode
+- device-aware delta sync
+- refresh-token sessions
+- append-only envelopes plus materialized event metadata
+- EAEE storage for sensitive event content
+
+Then I implemented a new PHP backend scaffold under `SelfHdb/` with:
+- `public/index.php`
+- Apache rewrite support via `.htaccess`
+- config bootstrap
+- PDO-based DB access
+- MariaDB/MySQL schema
+- service/repository/security structure
+- migration script
+- README and `.env.example`
+
+I added API routes for:
+- `GET /v1/health`
+- `GET /v1/bootstrap/status`
+- `POST /v1/auth/register`
+- `POST /v1/auth/login`
+- `POST /v1/auth/refresh`
+- `POST /v1/auth/logout`
+- `GET /v1/auth/session`
+- `GET /v1/devices`
+- `POST /v1/devices/{id}/revoke`
+- `GET /v1/sessions`
+- `POST /v1/sessions/{id}/revoke`
+- `GET /v1/sync/state`
+- `POST /v1/sync/bootstrap`
+- `POST /v1/sync/push`
+- `GET /v1/sync/pull`
+
+I also built:
+- local email/password auth
+- password hashing
+- bearer access tokens
+- hashed refresh tokens
+- device-linked sessions
+- revoke flows
+- rate limiting
+- audit logging
+- sync envelope acceptance and pull
+- server-side materialization structure for metadata/content
+
+I linted the PHP files with `php -n -l`. Syntax passed, but I noted that local runtime DB verification was not possible because the local PHP environment had broken extensions.
+
+One important truth I called out: the Electron client still had the old hosted auth flow, so it was not yet able to talk directly to this new PHP backend until the client side was updated.
+
+**Client self-host connection redesign**
+You then asked how users should connect the app to the backend themselves. I explained that the client should not ask for direct database credentials at runtime. Instead:
+- the backend owns DB credentials in server `.env`
+- the client should ask only for backend URL, email, password, and device name
+
+After that, I implemented the client-side self-host helper.
+
+That work included:
+- replacing the old hosted Google/Microsoft sign-in panel with a SelfHdb connection panel
+- adding fields for:
+  - backend URL
+  - email
+  - password
+  - device name
+- adding actions for:
+  - test connection
+  - register
+  - sign in
+  - disconnect
+  - sync now
+- keeping status, last sync, cursor, and account info visible
+
+I rewired the client hosted sync service so it now uses the new SelfHdb routes instead of the old provider-start / auth-flow polling model.
+
+**`.env` maker**
+You specifically asked for a client-side `.env maker` so self-hosting is easier.
+
+I implemented that too:
+- created a shared modular definition of SelfHdb env fields
+- used that to generate a server `.env`
+- added an export flow through Electron main process so the user can save the file locally
+- kept it modular so future backend config changes only need one shared definition updated
+
+The `.env maker` includes fields for:
+- app environment
+- app debug
+- app URL
+- app timezone
+- force HTTPS
+- DB host
+- DB port
+- DB name
+- DB user
+- DB password
+- DB charset
+- access token secret
+- token TTL values
+- rate limit values
+- sync/body size values
+
+I also corrected an important implementation detail: the shared `.env` helper initially used Node crypto directly, which would have broken the renderer bundle, so I changed it to a browser-safe random secret approach.
+
+**Tutorial**
+You also asked for a small tutorial in the client. I added a step-by-step self-host tutorial directly into the hosted settings panel covering:
+- upload `SelfHdb`
+- place the generated `.env`
+- create/import DB schema
+- point web root to `public`
+- verify `/v1/health`
+- connect the app with backend URL + account login
+
+I also made the UI explicitly explain what belongs in the app versus what belongs only in the backend `.env`, and that the app connects to the PHP API, not directly to MySQL.
+
+**Verification I ran**
+Across the work I ran different checks:
+- PHP syntax linting for the new backend with `php -n -l`
+- project tests with `npm test` in `Application`
+- Babel parse checks on edited renderer JSX files
+- Node syntax checks on updated main-process files
+
+At the end of the self-host client work:
+- `npm test` passed
+- Babel parse checks passed
+- syntax checks passed
+
+The main remaining gap I explicitly called out was live Electron window testing. I did not launch the full app UI and manually click through everything, so final runtime feel/behavior in the actual window still needs that last manual pass.
+
+**Important caveat**
+There were a few moments where I gave source-level confirmations without live UI execution. So the work was implemented in code and syntax/test checked where possible, but not every visual/runtime path was manually exercised in the running Electron app.
+
+If you want, I can turn this into a cleaner changelog grouped by:
+- frontend/UI
+- holidays/setup
+- tags
+- backend/SelfHdb
+- self-host connection system

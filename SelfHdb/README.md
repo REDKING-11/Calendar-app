@@ -1,33 +1,36 @@
 # SelfHdb
 
-`SelfHdb` is the self-hosted backend for the Calendar App. It is a personal-first sync server that keeps calendar data available 24/7 while the Electron app stays local-first.
+`SelfHdb` is the optional hosted backend for the Calendar App. The desktop app stays local-first; this backend adds account auth, trusted devices, persistent hosted sync, and server-side materialized metadata on normal PHP hosting.
 
-## What It Does
+## Stack
 
-- Stores server-encrypted calendar content in Postgres
-- Issues short-lived access tokens and rotating refresh sessions
-- Registers trusted devices and pairing approvals
-- Accepts signed sync envelopes from the desktop app
-- Holds Google/Microsoft provider tokens for hosted account sync
+- PHP 8.1+
+- MySQL / MariaDB via PDO
+- Apache / cPanel friendly routing
+- REST + JSON
 
-## Run Locally
+## Layout
 
-1. Copy `.env.example` to `.env`
-2. Fill in the base64 secrets and OAuth credentials
-3. Start Postgres and the API:
+- `public/` public web root and front controller
+- `src/` PHP application code
+- `config/` bootstrapping
+- `database/schema.sql` database schema
+- `bin/migrate.php` schema installer
 
-```bash
-docker compose up --build
-```
+## Setup
 
-Or run without Docker:
+1. Copy `.env.example` to `.env`.
+2. Fill in the database credentials and token secret.
+3. Create the MySQL / MariaDB database.
+4. Run `php -n bin/migrate.php` or import `database/schema.sql`.
+5. Point the web root to `public/`.
 
-```bash
-npm install
-npm run migrate
-npm start
-```
+## Production Notes
 
-## HTTPS
+- Keep `APP_FORCE_HTTPS=true` in production.
+- Store `.env` outside public web access.
+- The backend now implements local `email + password` auth for hosted mode.
 
-Production deployments should run behind HTTPS via Caddy, Nginx, or another reverse proxy. Set `PUBLIC_BASE_URL` to the external HTTPS origin and keep `ALLOW_INSECURE_HTTP=false`.
+## Current Client Contract Note
+
+The Electron client in `Application/` still contains an older provider-start/poll hosted auth flow. This backend implements the new local-auth contract from the current backend plan, so the client will need a follow-up integration pass for direct register/login UX.

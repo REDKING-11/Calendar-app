@@ -4,6 +4,12 @@ A self-hosted, local-first calendar that creates **one true availability view** 
 
 ---
 
+## Holiday Data
+
+Default public holiday import uses bundled data from `date-holidays` first, with Nager.Date as a fallback when bundled coverage is missing. The `date-holidays` package includes holiday datasets with additional attribution and share-alike requirements alongside the code license, so keep that in mind for future app notices and redistribution work.
+
+---
+
 ## Vision
 
 > One calendar truth. Full control. No cloud dependency.
@@ -175,7 +181,7 @@ Example:
 ### ✅ Phase – Core Calendar (MVP)
 
 * [ ] Local database (SQLite)
-* [(Not Done but you can make em not view or edit)] Events (CRUD)
+* [✔️] Events (CRUD)
 * [✔️] Day / Week / Month views
 * [✔️] Color categories
 * [ ] Free/busy calculation (internal only)

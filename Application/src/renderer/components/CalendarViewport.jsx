@@ -8,6 +8,7 @@ export default function CalendarViewport({
   calendarView,
   events,
   selectedDate,
+  timeZone,
   onSelectDate,
   onCreateEvent,
   onSelectEvent,
@@ -30,6 +31,7 @@ export default function CalendarViewport({
       {calendarView === 'month' ? (
         <MonthView
           events={events}
+          timeZone={timeZone}
           onCreateEvent={onCreateEvent}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
@@ -41,6 +43,7 @@ export default function CalendarViewport({
       {calendarView === 'week' ? (
         <WeekView
           events={events}
+          timeZone={timeZone}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
           onCreateEvent={onCreateEvent}
@@ -52,6 +55,7 @@ export default function CalendarViewport({
       {calendarView === 'year' ? (
         <YearView
           events={events}
+          timeZone={timeZone}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
           onCreateEvent={onCreateEvent}

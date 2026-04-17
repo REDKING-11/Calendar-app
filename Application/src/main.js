@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, dialog, safeStorage, shell } = require('electron');
 const { CalendarStore } = require('./data/calendar-store');
 const { registerCalendarHandlers } = require('./ipc/calendar-ipc');
 
@@ -34,6 +34,7 @@ const createWindow = () => {
 
 app.whenReady().then(() => {
   const store = new CalendarStore(app.getPath('userData'), {
+    dialog,
     safeStorage,
     shell,
   });

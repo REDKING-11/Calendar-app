@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { WEEKDAY_LABELS, buildMonthTiles, isSameDay } from './calendar-helpers';
+import { buildMonthTiles, getWeekdayLabels, isSameDay } from './calendar-helpers';
 
 const SIDEBAR_MONTH_SCROLL_LOCK_MS = 140;
 
@@ -7,6 +7,7 @@ export default function Sidebar({
   availableTags,
   events,
   visibleEvents,
+  timeZone,
   selectedDate,
   onSelectDate,
   onCreateEvent,
@@ -16,14 +17,17 @@ export default function Sidebar({
   onQuickFilterChange,
   activeTagFilters,
   onToggleTagFilter,
+  onManageTag,
   onClearFilters,
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
   const [isQuickFiltersOpen, setIsQuickFiltersOpen] = useState(true);
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const [tagActionMenu, setTagActionMenu] = useState(null);
   const monthPickerRef = useRef(null);
   const lastMonthScrollAtRef = useRef(0);
-  const tiles = useMemo(() => buildMonthTiles(viewDate, events), [viewDate, events]);
+  const tiles = useMemo(() => buildMonthTiles(viewDate, events, timeZone), [viewDate, events, timeZone]);
+  const weekdayLabels = useMemo(() => getWeekdayLabels(timeZone), [timeZone]);
   const monthOptions = useMemo(
     () =>
       Array.from({ length: 12 }, (_, index) => {
@@ -40,7 +44,8 @@ export default function Sidebar({
   const tagFilters = useMemo(
     () =>
       (availableTags || []).map((tag) => ({
-        id: tag.label,
+        id: tag.id || tag.label,
+        filterId: tag.label,
         label: tag.label,
         color: tag.color || '#475569',
       })),
@@ -89,6 +94,30 @@ export default function Sidebar({
     };
   }, [isMonthPickerOpen]);
 
+  useEffect(() => {
+    if (!tagActionMenu) {
+      return undefined;
+    }
+
+    const handlePointerDown = () => {
+      setTagActionMenu(null);
+    };
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setTagActionMenu(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [tagActionMenu]);
+
   const hasActiveFilters = searchQuery.trim() || activeTagFilters.length > 0;
 
   const changeViewMonth = (offset) => {
@@ -110,6 +139,32 @@ export default function Sidebar({
     lastMonthScrollAtRef.current = now;
     changeViewMonth(event.deltaY > 0 ? 1 : -1);
     setIsMonthPickerOpen(false);
+  };
+
+  const openTagActionMenu = (event, tag) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTagActionMenu({
+      tag,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
+
+  const handleTagMouseDown = (event, tag) => {
+    if (event.button !== 1) {
+      return;
+    }
+
+    openTagActionMenu(event, tag);
+  };
+
+  const handleTagAuxClick = (event, tag) => {
+    if (event.button !== 1) {
+      return;
+    }
+
+    openTagActionMenu(event, tag);
   };
 
   return (
@@ -196,7 +251,7 @@ export default function Sidebar({
           </div>
 
           <div className="grid grid-cols-7 gap-y-3 text-center text-[12px] font-semibold text-slate-500">
-            {WEEKDAY_LABELS.map((day) => (
+            {weekdayLabels.map((day) => (
               <div key={day} className="py-1">
                 {day[0]}
               </div>
@@ -296,14 +351,20 @@ export default function Sidebar({
               <div className="space-y-3">
                 {tagFilters.length > 0 ? (
                   tagFilters.map((item) => {
-                    const isActive = activeTagFilters.includes(item.id);
+                    const isActive = activeTagFilters.includes(item.filterId);
 
                     return (
-                      <label key={item.id} className="flex cursor-pointer items-center gap-3">
+                      <label
+                        key={item.id}
+                        className="flex cursor-pointer items-center gap-3"
+                        onMouseDown={(event) => handleTagMouseDown(event, item)}
+                        onAuxClick={(event) => handleTagAuxClick(event, item)}
+                        title='Middle-click for rename or delete'
+                      >
                         <input
                           type="checkbox"
                           checked={isActive}
-                          onChange={() => onToggleTagFilter?.(item.id)}
+                          onChange={() => onToggleTagFilter?.(item.filterId)}
                           className="sr-only"
                         />
                         <span
@@ -373,6 +434,51 @@ export default function Sidebar({
 
         <div className="mt-auto pt-10 text-sm text-slate-400">Terms - Privacy</div>
       </div>
+      {tagActionMenu ? (
+        <div
+          className="fixed z-50 min-w-[180px] rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_rgba(15,23,42,0.18)]"
+          style={{
+            left: Math.min(tagActionMenu.x, window.innerWidth - 196),
+            top: Math.min(tagActionMenu.y, window.innerHeight - 120),
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {tagActionMenu.tag.label}
+          </p>
+          <button
+            type="button"
+            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+            onClick={() => {
+              onManageTag?.(tagActionMenu.tag, 'rename');
+              setTagActionMenu(null);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 transition hover:bg-red-50"
+            onClick={() => {
+              onManageTag?.(tagActionMenu.tag, 'delete');
+              setTagActionMenu(null);
+            }}
+          >
+            Delete Fully
+          </button>
+          <div
+            role="alert"
+            className="mx-1 mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+              Warning
+            </p>
+            <p className="mt-1 text-xs leading-5 text-red-700">
+              Deleting this tag removes it from every event across the app.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }

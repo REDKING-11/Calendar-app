@@ -12,35 +12,39 @@ export function getWeekStartDayIndex(timeZone = getCurrentTimeZone()) {
   return timeZone.startsWith('America/') ? 0 : 1;
 }
 
-export const WEEKDAY_LABELS = [
-  ...BASE_WEEKDAY_LABELS.slice(getWeekStartDayIndex()),
-  ...BASE_WEEKDAY_LABELS.slice(0, getWeekStartDayIndex()),
-];
+export function getWeekdayLabels(timeZone = getCurrentTimeZone()) {
+  const weekStartDayIndex = getWeekStartDayIndex(timeZone);
+
+  return [
+    ...BASE_WEEKDAY_LABELS.slice(weekStartDayIndex),
+    ...BASE_WEEKDAY_LABELS.slice(0, weekStartDayIndex),
+  ];
+}
 
 export function startOfMonth(date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
-export function startOfCalendarGrid(date) {
+export function startOfCalendarGrid(date, timeZone = getCurrentTimeZone()) {
   const firstDayOfMonth = startOfMonth(date);
   const gridStart = new Date(firstDayOfMonth);
-  const weekStartDay = getWeekStartDayIndex();
+  const weekStartDay = getWeekStartDayIndex(timeZone);
   const offset = (firstDayOfMonth.getDay() - weekStartDay + 7) % 7;
   gridStart.setDate(firstDayOfMonth.getDate() - offset);
   return gridStart;
 }
 
-export function startOfWeek(date) {
+export function startOfWeek(date, timeZone = getCurrentTimeZone()) {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
-  const weekStartDay = getWeekStartDayIndex();
+  const weekStartDay = getWeekStartDayIndex(timeZone);
   const offset = (start.getDay() - weekStartDay + 7) % 7;
   start.setDate(start.getDate() - offset);
   return start;
 }
 
-export function endOfWeek(date) {
-  const nextDate = startOfWeek(date);
+export function endOfWeek(date, timeZone = getCurrentTimeZone()) {
+  const nextDate = startOfWeek(date, timeZone);
   nextDate.setDate(nextDate.getDate() + 7);
   return nextDate;
 }
@@ -62,9 +66,9 @@ export function isEventOnDate(event, date) {
   return isSameDay(eventDate, date);
 }
 
-export function buildMonthTiles(viewDate, events) {
+export function buildMonthTiles(viewDate, events, timeZone = getCurrentTimeZone()) {
   const monthStart = startOfMonth(viewDate);
-  const gridStart = startOfCalendarGrid(viewDate);
+  const gridStart = startOfCalendarGrid(viewDate, timeZone);
 
   return Array.from({ length: 35 }, (_, index) => {
     const date = new Date(gridStart);
@@ -82,8 +86,8 @@ export function buildMonthTiles(viewDate, events) {
   });
 }
 
-export function buildWeekDays(selectedDate, events) {
-  const weekStart = startOfWeek(selectedDate);
+export function buildWeekDays(selectedDate, events, timeZone = getCurrentTimeZone()) {
+  const weekStart = startOfWeek(selectedDate, timeZone);
 
   return Array.from({ length: 7 }, (_, index) => {
     const date = new Date(weekStart);
@@ -100,7 +104,7 @@ export function buildWeekDays(selectedDate, events) {
   });
 }
 
-export function buildYearMonths(viewDate, events) {
+export function buildYearMonths(viewDate, events, timeZone = getCurrentTimeZone()) {
   const year = viewDate.getFullYear();
 
   return Array.from({ length: 12 }, (_, index) => {
@@ -112,7 +116,7 @@ export function buildYearMonths(viewDate, events) {
         eventDate.getMonth() === index
       );
     }).length;
-    const gridStart = startOfCalendarGrid(date);
+    const gridStart = startOfCalendarGrid(date, timeZone);
     const days = Array.from({ length: 42 }, (_, dayIndex) => {
       const dayDate = new Date(gridStart);
       dayDate.setDate(gridStart.getDate() + dayIndex);

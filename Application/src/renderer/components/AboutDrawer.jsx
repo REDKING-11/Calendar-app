@@ -12,10 +12,18 @@ export default function AboutDrawer({
   security,
   hostedUrl,
   onHostedUrlChange,
-  onStartHostedConnect,
-  onPollHostedAuth,
+  hostedEmail,
+  onHostedEmailChange,
+  hostedPassword,
+  onHostedPasswordChange,
+  hostedDeviceName,
+  onHostedDeviceNameChange,
+  onHostedTestConnection,
+  onHostedRegister,
+  onHostedSignIn,
   onSyncHostedNow,
   onDisconnectHostedSync,
+  onExportHostedEnv,
   hostedBusyAction,
   hostedStatusMessage,
 }) {
@@ -51,10 +59,18 @@ export default function AboutDrawer({
           hosted={security?.hosted}
           hostedUrl={hostedUrl}
           onHostedUrlChange={onHostedUrlChange}
-          onStartConnect={onStartHostedConnect}
-          onPollAuth={onPollHostedAuth}
+          hostedEmail={hostedEmail}
+          onHostedEmailChange={onHostedEmailChange}
+          hostedPassword={hostedPassword}
+          onHostedPasswordChange={onHostedPasswordChange}
+          hostedDeviceName={hostedDeviceName}
+          onHostedDeviceNameChange={onHostedDeviceNameChange}
+          onTestConnection={onHostedTestConnection}
+          onRegister={onHostedRegister}
+          onSignIn={onHostedSignIn}
           onSyncNow={onSyncHostedNow}
           onDisconnect={onDisconnectHostedSync}
+          onExportEnv={onExportHostedEnv}
           busyAction={hostedBusyAction}
           statusMessage={hostedStatusMessage}
         />

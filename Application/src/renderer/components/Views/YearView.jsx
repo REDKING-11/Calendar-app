@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
-import { WEEKDAY_LABELS, buildYearMonths } from '../calendar-helpers';
+import { buildYearMonths, getWeekdayLabels } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 
 export default function YearView({
   events,
+  timeZone,
   selectedDate,
   onSelectMonth,
   onCreateEvent,
@@ -13,9 +14,10 @@ export default function YearView({
   onChangeView,
 }) {
   const months = useMemo(
-    () => buildYearMonths(selectedDate, events),
-    [selectedDate, events]
+    () => buildYearMonths(selectedDate, events, timeZone),
+    [selectedDate, events, timeZone]
   );
+  const weekdayLabels = useMemo(() => getWeekdayLabels(timeZone), [timeZone]);
 
   const goToPreviousYear = () => {
     const nextDate = new Date(selectedDate);
@@ -66,7 +68,7 @@ export default function YearView({
             </div>
 
             <div className="year-mini-weekdays" aria-hidden="true">
-              {WEEKDAY_LABELS.map((label) => (
+              {weekdayLabels.map((label) => (
                 <span key={`${month.key}-${label}`} className="year-mini-weekday">
                   {label[0]}
                 </span>

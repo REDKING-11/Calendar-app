@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
+const { HolidayService } = require('./holiday-service');
 const { CryptoService, CIPHER_VERSION } = require('../security/crypto-service');
 const { HostedSyncService } = require('../security/hosted-sync-service');
 const { OAuthService } = require('../security/oauth-service');
@@ -20,8 +21,69 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+const HOLIDAY_SEED_STATE_META_KEY = 'holidaySeedState';
+const HOLIDAY_TAG_COLOR = '#b91c1c';
+const COUNTRY_TAG_COLOR = '#2563eb';
+const HOLIDAY_EVENT_COLOR = '#dc2626';
+const HOLIDAY_DESCRIPTION_MARKER = '[default-public-holiday]';
+
 function createId(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function getHolidaySeedYears() {
+  const currentYear = new Date().getFullYear();
+  return [currentYear, currentYear + 1];
+}
+
+function normalizeCountryCode(countryCode) {
+  return String(countryCode || '').trim().toUpperCase();
+}
+
+function normalizeSeedYears(years = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(years) ? years : [years])
+        .map((year) => Number(year))
+        .filter((year) => Number.isInteger(year))
+    )
+  ).sort((left, right) => left - right);
+}
+
+function readHolidaySeedState(rawValue) {
+  if (!rawValue) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).map(([countryCode, years]) => [
+        normalizeCountryCode(countryCode),
+        normalizeSeedYears(years),
+      ])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function dedupeTagsByLabel(tags = []) {
+  const seen = new Set();
+
+  return (tags || []).filter((tag) => {
+    const key = String(tag?.label || '').trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildDemoEvents() {
@@ -170,11 +232,15 @@ class CalendarStore {
     this.legacyJsonPath = path.join(baseDir, 'calendar-data.json');
     this.legacyBackupPath = path.join(baseDir, 'calendar-data.legacy-backup.enc');
     this.vault = new SecureVault(baseDir, options.safeStorage);
+    this.dialog = options.dialog;
     this.vaultState = this.vault.ensureMasterKey();
     this.cryptoService = new CryptoService(this.vaultState.key);
     this.db = new DatabaseSync(this.databasePath);
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.reauthService = new ReauthService();
+    this.holidayService = new HolidayService({ fetchImpl: options.fetchImpl });
+    this.holidayPreloadCache = new Map();
+    this.holidayImportPromises = new Map();
 
     this.initializeSchema();
     this.deviceService = new TrustedDeviceService({
@@ -413,6 +479,14 @@ class CalendarStore {
     return existing;
   }
 
+  getHolidaySeedState() {
+    return readHolidaySeedState(this.getMeta(HOLIDAY_SEED_STATE_META_KEY));
+  }
+
+  setHolidaySeedState(nextState) {
+    this.setMeta(HOLIDAY_SEED_STATE_META_KEY, JSON.stringify(nextState || {}));
+  }
+
   nextSequence() {
     const nextSequence = Number(this.getMeta('lastSequence') || '0') + 1;
     this.setMeta('lastSequence', String(nextSequence));
@@ -554,6 +628,143 @@ class CalendarStore {
     return Array.from(this.getTagCatalogMap().values()).sort((left, right) =>
       left.label.localeCompare(right.label)
     );
+  }
+
+  deleteTagCatalogEntry(tagId) {
+    this.db.prepare('DELETE FROM tag_catalog WHERE id = :id').run({ id: tagId });
+  }
+
+  updateEventTags(event, nextTags) {
+    const normalizedTags = dedupeTagsByLabel(this.normalizeTags(nextTags));
+    const timestamp = nowIso();
+    const currentContent = {
+      title: event.title,
+      description: event.description,
+      groupName: event.groupName,
+      tags: event.tags || [],
+      externalProviderLinks: event.externalProviderLinks || [],
+    };
+    const nextContent = {
+      ...currentContent,
+      tags: normalizedTags,
+    };
+
+    if (JSON.stringify(nextContent.tags) === JSON.stringify(currentContent.tags)) {
+      return event;
+    }
+
+    this.upsertTagCatalog(normalizedTags);
+    this.db
+      .prepare(
+        `UPDATE event_metadata
+         SET updated_at = :updatedAt,
+             updated_by = :updatedBy
+         WHERE id = :id`
+      )
+      .run({
+        id: event.id,
+        updatedAt: timestamp,
+        updatedBy: this.deviceId,
+      });
+    this.db
+      .prepare(
+        `UPDATE event_content
+         SET cipher_text = :cipherText
+         WHERE event_id = :eventId`
+      )
+      .run({
+        eventId: event.id,
+        cipherText: this.cryptoService.encryptJson(nextContent, `event:${event.id}:content`),
+      });
+
+    this.recordChange({
+      entity: 'event',
+      entityId: event.id,
+      operation: 'update',
+      patch: { tags: nextContent.tags },
+      deviceId: this.deviceId,
+      signatureKeyId: this.deviceId,
+    });
+
+    return {
+      ...event,
+      tags: nextContent.tags,
+      updatedAt: timestamp,
+      updatedBy: this.deviceId,
+    };
+  }
+
+  renameTagSystemWide(tagId, nextLabel) {
+    const currentTag = this.getTagCatalogSnapshot().find((tag) => tag.id === tagId);
+    const sanitizedLabel = String(nextLabel || '').trim();
+
+    if (!currentTag) {
+      throw new Error('Tag not found.');
+    }
+
+    if (!sanitizedLabel) {
+      throw new Error('Tag name cannot be empty.');
+    }
+
+    const matchingTag = this.getTagCatalogSnapshot().find(
+      (tag) => tag.label.toLowerCase() === sanitizedLabel.toLowerCase()
+    );
+    const targetTag =
+      matchingTag && matchingTag.id !== currentTag.id
+        ? matchingTag
+        : {
+            ...currentTag,
+            label: sanitizedLabel,
+          };
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      if (targetTag.id === currentTag.id) {
+        this.upsertTagCatalog([targetTag]);
+      }
+
+      for (const event of this.listEvents(false)) {
+        const nextTags = (event.tags || []).map((tag) =>
+          tag.id === currentTag.id || tag.label.toLowerCase() === currentTag.label.toLowerCase()
+            ? {
+                id: targetTag.id,
+                label: targetTag.label,
+                color: targetTag.color,
+              }
+            : tag
+        );
+
+        this.updateEventTags(event, nextTags);
+      }
+
+      if (targetTag.id !== currentTag.id) {
+        this.deleteTagCatalogEntry(currentTag.id);
+      }
+    });
+
+    return this.snapshot();
+  }
+
+  deleteTagSystemWide(tagId) {
+    const currentTag = this.getTagCatalogSnapshot().find((tag) => tag.id === tagId);
+
+    if (!currentTag) {
+      throw new Error('Tag not found.');
+    }
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      for (const event of this.listEvents(false)) {
+        const nextTags = (event.tags || []).filter(
+          (tag) => tag.id !== currentTag.id && tag.label.toLowerCase() !== currentTag.label.toLowerCase()
+        );
+        this.updateEventTags(event, nextTags);
+      }
+
+      this.deleteTagCatalogEntry(currentTag.id);
+    });
+
+    return this.snapshot();
   }
 
   buildEventContent(input) {
@@ -735,6 +946,238 @@ class CalendarStore {
       .all({ includeDeleted: includeDeleted ? 1 : 0 });
 
     return rows.map((row) => this.rowToEvent(row));
+  }
+
+  isHolidayAlreadyPresent(events, countryCode, holiday) {
+    const holidayTitle = holiday.name || holiday.localName || 'Public holiday';
+
+    return events.some((event) => {
+      const eventDate = String(event.startsAt || '').slice(0, 10);
+      const hasHolidayTag = (event.tags || []).some((tag) => tag.label === 'Holiday');
+      const hasCountryTag = (event.tags || []).some(
+        (tag) => tag.label === `${countryCode} Holiday`
+      );
+
+      return (
+        eventDate === holiday.date &&
+        event.title === holidayTitle &&
+        (hasHolidayTag ||
+          hasCountryTag ||
+          String(event.description || '').includes(HOLIDAY_DESCRIPTION_MARKER))
+      );
+    });
+  }
+
+  createHolidayEventInput(countryCode, holiday) {
+    return sanitizeEventCreateInput({
+      title: holiday.name || holiday.localName || 'Public holiday',
+      description: `${HOLIDAY_DESCRIPTION_MARKER} Imported default public holiday for ${countryCode}.`,
+      type: 'event',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      groupName: '',
+      startsAt: new Date(`${holiday.date}T09:00:00`).toISOString(),
+      endsAt: new Date(`${holiday.date}T09:30:00`).toISOString(),
+      color: HOLIDAY_EVENT_COLOR,
+      tags: [
+        { label: 'Holiday', color: HOLIDAY_TAG_COLOR },
+        { label: `${countryCode} Holiday`, color: COUNTRY_TAG_COLOR },
+      ],
+    });
+  }
+
+  getHolidayCountries() {
+    return this.holidayService.getAvailableCountries();
+  }
+
+  async preloadHolidays({ countryCode, years = getHolidaySeedYears(), timeZone } = {}) {
+    const normalizedCountryCode = normalizeCountryCode(countryCode);
+    const normalizedYears = normalizeSeedYears(
+      Array.isArray(years) && years.length > 0 ? years : getHolidaySeedYears()
+    );
+
+    if (!normalizedCountryCode) {
+      return {
+        countryCode: '',
+        status: 'idle',
+        years: [],
+      };
+    }
+
+    const existingEntry = this.holidayPreloadCache.get(normalizedCountryCode);
+    const cachedYears = existingEntry?.holidaysByYear || {};
+    const missingYears = normalizedYears.filter((year) => !Array.isArray(cachedYears[year]));
+
+    if (missingYears.length === 0 && existingEntry?.status === 'ready') {
+      return {
+        countryCode: normalizedCountryCode,
+        status: 'ready',
+        years: normalizedYears,
+      };
+    }
+
+    if (
+      existingEntry?.status === 'loading' &&
+      existingEntry?.promise &&
+      missingYears.every((year) => (existingEntry.pendingYears || []).includes(year))
+    ) {
+      return existingEntry.promise;
+    }
+
+    const preloadPromise = Promise.all(
+      missingYears.map(async (year) => [
+        year,
+        await this.holidayService.getPublicHolidays({
+          countryCode: normalizedCountryCode,
+          year,
+          timeZone,
+        }),
+      ])
+    )
+      .then((entries) => {
+        const holidaysByYear = {
+          ...cachedYears,
+          ...Object.fromEntries(entries),
+        };
+
+        this.holidayPreloadCache.set(normalizedCountryCode, {
+          status: 'ready',
+          holidaysByYear,
+          pendingYears: [],
+        });
+
+        return {
+          countryCode: normalizedCountryCode,
+          status: 'ready',
+          years: normalizedYears,
+        };
+      })
+      .catch((error) => {
+        this.holidayPreloadCache.set(normalizedCountryCode, {
+          status: 'error',
+          holidaysByYear: cachedYears,
+          pendingYears: [],
+          error: error?.message || 'Holiday preload failed.',
+        });
+
+        return {
+          countryCode: normalizedCountryCode,
+          status: 'error',
+          years: normalizedYears,
+          error: error?.message || 'Holiday preload failed.',
+        };
+      });
+
+    this.holidayPreloadCache.set(normalizedCountryCode, {
+      status: 'loading',
+      holidaysByYear: cachedYears,
+      pendingYears: missingYears,
+      promise: preloadPromise,
+    });
+
+    return preloadPromise;
+  }
+
+  async importHolidays({ countryCode, years = getHolidaySeedYears(), timeZone } = {}) {
+    const normalizedCountryCode = normalizeCountryCode(countryCode);
+    const normalizedYears = normalizeSeedYears(
+      Array.isArray(years) && years.length > 0 ? years : getHolidaySeedYears()
+    );
+
+    if (!normalizedCountryCode) {
+      return {
+        snapshot: this.snapshot(),
+        importedCount: 0,
+        warning: '',
+      };
+    }
+
+    if (this.holidayImportPromises.has(normalizedCountryCode)) {
+      return this.holidayImportPromises.get(normalizedCountryCode);
+    }
+
+    const importPromise = (async () => {
+      const preloadResult = await this.preloadHolidays({
+        countryCode: normalizedCountryCode,
+        years: normalizedYears,
+        timeZone,
+      });
+
+      if (preloadResult.status === 'error') {
+        return {
+          snapshot: this.snapshot(),
+          importedCount: 0,
+          warning: 'Settings were saved, but holidays could not be imported right now.',
+        };
+      }
+
+      const preloadEntry = this.holidayPreloadCache.get(normalizedCountryCode);
+      const holidaysByYear = preloadEntry?.holidaysByYear || {};
+      const holidaySeedState = this.getHolidaySeedState();
+      const seededYears = new Set(holidaySeedState[normalizedCountryCode] || []);
+      const yearsWithData = normalizedYears.filter((year) => Array.isArray(holidaysByYear[year]));
+
+      if (yearsWithData.length === 0) {
+        return {
+          snapshot: this.snapshot(),
+          importedCount: 0,
+          warning: 'Settings were saved, but holidays could not be imported right now.',
+        };
+      }
+
+      let importedCount = 0;
+      const existingEvents = this.listEvents(false);
+      const shouldMarkModified = yearsWithData.some(
+        (year) => !seededYears.has(year) && (holidaysByYear[year] || []).length > 0
+      );
+
+      if (shouldMarkModified) {
+        this.maybeMarkDemoSeedModified();
+      }
+
+      this.withTransaction(() => {
+        const knownEvents = [...existingEvents];
+
+        for (const year of yearsWithData) {
+          if (seededYears.has(year)) {
+            continue;
+          }
+
+          for (const holiday of holidaysByYear[year] || []) {
+            if (this.isHolidayAlreadyPresent(knownEvents, normalizedCountryCode, holiday)) {
+              continue;
+            }
+
+            const createdEvent = this.insertEventRecord(
+              this.createHolidayEventInput(normalizedCountryCode, holiday),
+              { deviceId: this.deviceId }
+            );
+
+            knownEvents.push(createdEvent);
+            importedCount += 1;
+          }
+
+          seededYears.add(year);
+        }
+
+        holidaySeedState[normalizedCountryCode] = Array.from(seededYears).sort(
+          (left, right) => left - right
+        );
+        this.setHolidaySeedState(holidaySeedState);
+      });
+
+      return {
+        snapshot: this.snapshot(),
+        importedCount,
+        warning: '',
+      };
+    })().finally(() => {
+      this.holidayImportPromises.delete(normalizedCountryCode);
+    });
+
+    this.holidayImportPromises.set(normalizedCountryCode, importPromise);
+    return importPromise;
   }
 
   listChangeSummaries() {
@@ -1498,12 +1941,16 @@ class CalendarStore {
     }
   }
 
-  startHostedSyncConnect(baseUrl, provider) {
-    return this.runHostedAction(() => this.hostedSyncService.startAuth(provider, baseUrl));
+  testHostedBackend(baseUrl) {
+    return this.runHostedAction(() => this.hostedSyncService.testConnection(baseUrl));
   }
 
-  pollHostedSyncAuth() {
-    return this.runHostedAction(() => this.hostedSyncService.pollAuthFlow());
+  registerHostedAccount(input) {
+    return this.runHostedAction(() => this.hostedSyncService.register(input || {}));
+  }
+
+  loginHostedAccount(input) {
+    return this.runHostedAction(() => this.hostedSyncService.login(input || {}));
   }
 
   syncHostedNow() {
@@ -1512,6 +1959,33 @@ class CalendarStore {
 
   disconnectHostedSync() {
     return this.runHostedAction(() => this.hostedSyncService.disconnect());
+  }
+
+  async exportHostedEnvFile(values) {
+    const envContent = this.hostedSyncService.buildEnvFile(values || {});
+    const saveResult = await this.dialog?.showSaveDialog({
+      title: 'Export SelfHdb .env',
+      defaultPath: path.join(os.homedir(), '.env'),
+      buttonLabel: 'Save .env',
+    });
+
+    if (!saveResult || saveResult.canceled || !saveResult.filePath) {
+      return {
+        canceled: true,
+      };
+    }
+
+    fs.writeFileSync(saveResult.filePath, `${envContent}\n`, 'utf8');
+
+    this.logSecurityEvent('hosted_env_exported', {
+      targetType: 'hosted_backend',
+      targetId: saveResult.filePath,
+    });
+
+    return {
+      canceled: false,
+      filePath: saveResult.filePath,
+    };
   }
 
   beginReauth(action) {

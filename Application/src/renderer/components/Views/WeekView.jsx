@@ -32,24 +32,17 @@ function formatEventHeading(event) {
 }
 
 function formatWeekTitle(startDate, endDate) {
+  const startMonth = startDate.toLocaleDateString('en-US', { month: 'short' });
+  const endMonth = endDate.toLocaleDateString('en-US', { month: 'short' });
+  const startDay = startDate.getDate();
+  const endDay = endDate.getDate();
+  const endYear = endDate.getFullYear();
+
   if (startDate.getMonth() === endDate.getMonth()) {
-    return `${startDate.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    })}-${endDate.toLocaleDateString('en-US', {
-      day: 'numeric',
-      year: 'numeric',
-    })}`;
+    return `${startMonth} ${startDay}-${endDay}, ${endYear}`;
   }
 
-  return `${startDate.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-  })}-${endDate.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })}`;
+  return `${startMonth} ${startDay}-${endMonth} ${endDay}, ${endYear}`;
 }
 
 function getEventLayout(event) {
@@ -67,6 +60,7 @@ function getEventLayout(event) {
 
 export default function WeekView({
   events,
+  timeZone,
   selectedDate,
   onSelectDate,
   onCreateEvent,
@@ -75,8 +69,8 @@ export default function WeekView({
   onChangeView,
 }) {
   const weekDays = useMemo(
-    () => buildWeekDays(selectedDate, events),
-    [selectedDate, events]
+    () => buildWeekDays(selectedDate, events, timeZone),
+    [selectedDate, events, timeZone]
   );
 
   const selectedDay = weekDays.find((day) => day.isSelected) || weekDays[0];
@@ -85,13 +79,13 @@ export default function WeekView({
   const goToPreviousWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() - 7);
-    onSelectDate?.(startOfWeek(nextDate));
+    onSelectDate?.(startOfWeek(nextDate, timeZone));
   };
 
   const goToNextWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() + 7);
-    onSelectDate?.(startOfWeek(nextDate));
+    onSelectDate?.(startOfWeek(nextDate, timeZone));
   };
 
   const goToToday = () => {

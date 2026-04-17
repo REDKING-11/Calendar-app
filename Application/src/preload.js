@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld('calendarApp', {
   createEvent: (input) => ipcRenderer.invoke('calendar:createEvent', input),
   updateEvent: (input) => ipcRenderer.invoke('calendar:updateEvent', input),
   deleteEvent: (eventId) => ipcRenderer.invoke('calendar:deleteEvent', eventId),
+  renameTag: (input) => ipcRenderer.invoke('calendar:renameTag', input),
+  deleteTag: (tagId) => ipcRenderer.invoke('calendar:deleteTag', tagId),
+  getHolidayCountries: () => ipcRenderer.invoke('calendar:getHolidayCountries'),
+  preloadHolidays: (input) => ipcRenderer.invoke('calendar:preloadHolidays', input),
+  importHolidays: (input) => ipcRenderer.invoke('calendar:importHolidays', input),
   getSecuritySnapshot: () => ipcRenderer.invoke('security:getSnapshot'),
   getSecurityProviders: () => ipcRenderer.invoke('security:getProviders'),
   listConnectedAccounts: () => ipcRenderer.invoke('security:listAccounts'),
@@ -21,11 +26,12 @@ contextBridge.exposeInMainWorld('calendarApp', {
   revokeTrustedDevice: (deviceId) =>
     ipcRenderer.invoke('security:revokeTrustedDevice', deviceId),
   getHostedSyncState: () => ipcRenderer.invoke('hosted:getState'),
-  startHostedSyncConnect: (baseUrl, provider) =>
-    ipcRenderer.invoke('hosted:startConnect', baseUrl, provider),
-  pollHostedSyncAuth: () => ipcRenderer.invoke('hosted:pollAuth'),
+  testHostedConnection: (baseUrl) => ipcRenderer.invoke('hosted:testConnection', baseUrl),
+  registerHostedAccount: (input) => ipcRenderer.invoke('hosted:register', input),
+  loginHostedAccount: (input) => ipcRenderer.invoke('hosted:login', input),
   syncHostedNow: () => ipcRenderer.invoke('hosted:syncNow'),
   disconnectHostedSync: () => ipcRenderer.invoke('hosted:disconnect'),
+  exportHostedEnv: (values) => ipcRenderer.invoke('hosted:exportEnv', values),
   beginReauth: (action) => ipcRenderer.invoke('security:beginReauth', action),
   completeReauth: (challengeId, response) =>
     ipcRenderer.invoke('security:completeReauth', challengeId, response),

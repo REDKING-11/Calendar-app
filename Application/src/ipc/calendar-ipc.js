@@ -6,6 +6,11 @@ function registerCalendarHandlers(store) {
     'calendar:createEvent',
     'calendar:updateEvent',
     'calendar:deleteEvent',
+    'calendar:renameTag',
+    'calendar:deleteTag',
+    'calendar:getHolidayCountries',
+    'calendar:preloadHolidays',
+    'calendar:importHolidays',
     'security:getSnapshot',
     'security:getProviders',
     'security:listAccounts',
@@ -18,10 +23,12 @@ function registerCalendarHandlers(store) {
     'security:approvePairing',
     'security:revokeTrustedDevice',
     'hosted:getState',
-    'hosted:startConnect',
-    'hosted:pollAuth',
+    'hosted:testConnection',
+    'hosted:register',
+    'hosted:login',
     'hosted:syncNow',
     'hosted:disconnect',
+    'hosted:exportEnv',
     'security:beginReauth',
     'security:completeReauth',
     'security:exportSecureData',
@@ -34,6 +41,13 @@ function registerCalendarHandlers(store) {
   ipcMain.handle('calendar:createEvent', (_event, input) => store.createEvent(input));
   ipcMain.handle('calendar:updateEvent', (_event, input) => store.updateEvent(input));
   ipcMain.handle('calendar:deleteEvent', (_event, eventId) => store.deleteEvent(eventId));
+  ipcMain.handle('calendar:renameTag', (_event, input) =>
+    store.renameTagSystemWide(input?.tagId, input?.label)
+  );
+  ipcMain.handle('calendar:deleteTag', (_event, tagId) => store.deleteTagSystemWide(tagId));
+  ipcMain.handle('calendar:getHolidayCountries', () => store.getHolidayCountries());
+  ipcMain.handle('calendar:preloadHolidays', (_event, input) => store.preloadHolidays(input));
+  ipcMain.handle('calendar:importHolidays', (_event, input) => store.importHolidays(input));
   ipcMain.handle('security:getSnapshot', () => store.getSecuritySnapshot());
   ipcMain.handle('security:getProviders', () => store.getAvailableProviders());
   ipcMain.handle('security:listAccounts', () => store.listConnectedAccounts());
@@ -58,12 +72,12 @@ function registerCalendarHandlers(store) {
     store.revokeTrustedDevice(deviceId)
   );
   ipcMain.handle('hosted:getState', () => store.getHostedSyncState());
-  ipcMain.handle('hosted:startConnect', (_event, baseUrl, provider) =>
-    store.startHostedSyncConnect(baseUrl, provider)
-  );
-  ipcMain.handle('hosted:pollAuth', () => store.pollHostedSyncAuth());
+  ipcMain.handle('hosted:testConnection', (_event, baseUrl) => store.testHostedBackend(baseUrl));
+  ipcMain.handle('hosted:register', (_event, input) => store.registerHostedAccount(input));
+  ipcMain.handle('hosted:login', (_event, input) => store.loginHostedAccount(input));
   ipcMain.handle('hosted:syncNow', () => store.syncHostedNow());
   ipcMain.handle('hosted:disconnect', () => store.disconnectHostedSync());
+  ipcMain.handle('hosted:exportEnv', (_event, values) => store.exportHostedEnvFile(values));
   ipcMain.handle('security:beginReauth', (_event, action) => store.beginReauth(action));
   ipcMain.handle('security:completeReauth', (_event, challengeId, response) =>
     store.completeReauth(challengeId, response)
