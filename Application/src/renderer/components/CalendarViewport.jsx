@@ -7,6 +7,7 @@ import YearView from './Views/YearView';
 export default function CalendarViewport({
   calendarView,
   events,
+  preferences,
   selectedDate,
   timeZone,
   onSelectDate,
@@ -20,6 +21,7 @@ export default function CalendarViewport({
       {calendarView === 'day' ? (
         <DayView
           events={events}
+          preferences={preferences}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
           onCreateEvent={onCreateEvent}
@@ -31,6 +33,7 @@ export default function CalendarViewport({
       {calendarView === 'month' ? (
         <MonthView
           events={events}
+          preferences={preferences}
           timeZone={timeZone}
           onCreateEvent={onCreateEvent}
           selectedDate={selectedDate}
@@ -43,6 +46,7 @@ export default function CalendarViewport({
       {calendarView === 'week' ? (
         <WeekView
           events={events}
+          preferences={preferences}
           timeZone={timeZone}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
@@ -55,6 +59,7 @@ export default function CalendarViewport({
       {calendarView === 'year' ? (
         <YearView
           events={events}
+          preferences={preferences}
           timeZone={timeZone}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}

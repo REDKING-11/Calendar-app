@@ -6,6 +6,7 @@ import EventComposerDrawer from './components/EventComposerDrawer';
 import EventOverviewPopover from './components/EventOverviewPopover';
 import Header from './components/Header';
 import Introduction from './components/introduction';
+import SettingsWindow from './components/SettingsWindow';
 import Sidebar from './components/Sidebar';
 import UpcomingPopover from './components/UpcomingPopover';
 import {
@@ -21,11 +22,9 @@ import {
   createEmptyDraftEvent,
   createEmptyDraftTag,
 } from './eventDraft';
+import { STORAGE_KEYS, useCalendarPreferences, updatePreference } from './preferences';
 import './styles.css';
 
-const SETUP_COMPLETE_STORAGE_KEY = 'calendar-setup-complete';
-const HOSTED_EMAIL_STORAGE_KEY = 'calendar-hosted-email';
-const HOSTED_DEVICE_NAME_STORAGE_KEY = 'calendar-hosted-device-name';
 const HOLIDAY_PRELOAD_STATUS = {
   idle: 'idle',
   loading: 'loading',
@@ -33,12 +32,29 @@ const HOLIDAY_PRELOAD_STATUS = {
   error: 'error',
 };
 
+function getWindowMode() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('window') || 'main';
+}
+
+function buildSettingsWindowFeatures() {
+  return [
+    'popup=yes',
+    'width=980',
+    'height=900',
+    'left=120',
+    'top=80',
+    'resizable=yes',
+    'scrollbars=yes',
+  ].join(',');
+}
+
 function getHolidaySeedYears() {
   const currentYear = new Date().getFullYear();
   return [currentYear, currentYear + 1];
 }
 
-function getVisibleEventsForView(events, calendarView, selectedDate, timeZone) {
+function getVisibleEventsForView(events, calendarView, selectedDate, timeZone, weekStartsOn) {
   if (!selectedDate) {
     return events;
   }
@@ -48,8 +64,8 @@ function getVisibleEventsForView(events, calendarView, selectedDate, timeZone) {
   }
 
   if (calendarView === 'week') {
-    const weekStart = startOfWeek(selectedDate, timeZone);
-    const weekEnd = endOfWeek(selectedDate, timeZone);
+    const weekStart = startOfWeek(selectedDate, timeZone, weekStartsOn);
+    const weekEnd = endOfWeek(selectedDate, timeZone, weekStartsOn);
     return events.filter((event) => {
       const startsAt = new Date(event.startsAt);
       return startsAt >= weekStart && startsAt < weekEnd;
@@ -110,72 +126,67 @@ function collectAvailableTags(events = [], snapshotTags = []) {
   );
 }
 
+async function openSettingsExperience() {
+  const result = await window.calendarApp.openSettingsWindow();
+  if (result?.opened) {
+    return result;
+  }
+
+  const settingsUrl = `${window.location.origin}${window.location.pathname}?window=settings`;
+  const popup = window.open(settingsUrl, '_blank', buildSettingsWindowFeatures());
+
+  if (!popup) {
+    window.location.search = '?window=settings';
+  }
+
+  return {
+    opened: Boolean(popup),
+    reused: false,
+    fallbackRequired: true,
+  };
+}
+
 function App() {
+  const windowMode = getWindowMode();
   const detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { preferences, setPreferences, effectiveTheme } = useCalendarPreferences();
   const [snapshot, setSnapshot] = useState(null);
-  const [draftEvent, setDraftEvent] = useState(() => createEmptyDraftEvent(new Date()));
+  const [draftEvent, setDraftEvent] = useState(() =>
+    createEmptyDraftEvent(new Date(), preferences.defaultEventDuration)
+  );
   const [draftTag, setDraftTag] = useState(createEmptyDraftTag);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [composerMode, setComposerMode] = useState('create');
   const [activeEvent, setActiveEvent] = useState(null);
-  const [calendarView, setCalendarView] = useState('month');
+  const [calendarView, setCalendarView] = useState(preferences.defaultView);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [searchQuery, setSearchQuery] = useState('');
   const [quickFilter, setQuickFilter] = useState('all');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [isUpcomingOpen, setIsUpcomingOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
-  const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(() => {
     if (typeof window === 'undefined') {
       return true;
     }
 
-    const persistedSetupComplete = window.localStorage.getItem(SETUP_COMPLETE_STORAGE_KEY);
+    const persistedSetupComplete = window.localStorage.getItem(STORAGE_KEYS.setupComplete);
     if (persistedSetupComplete !== null) {
       return persistedSetupComplete === 'true';
     }
 
     return Boolean(
-      window.localStorage.getItem('calendar-user-country') ||
-        window.localStorage.getItem('calendar-user-timezone') ||
-        window.localStorage.getItem('calendar-user-name')
+      window.localStorage.getItem(STORAGE_KEYS.userCountry) ||
+        window.localStorage.getItem(STORAGE_KEYS.userTimeZone) ||
+        window.localStorage.getItem(STORAGE_KEYS.userName)
     );
-  });
-  const [userTimeZone, setUserTimeZone] = useState(() => {
-    if (typeof window === 'undefined') {
-      return detectedTimeZone;
-    }
-
-    return window.localStorage.getItem('calendar-user-timezone') || detectedTimeZone;
-  });
-  const [userCountryCode, setUserCountryCode] = useState(() => {
-    if (typeof window === 'undefined') {
-      return '';
-    }
-
-    return window.localStorage.getItem('calendar-user-country') || '';
   });
   const [holidayPreloadState, setHolidayPreloadState] = useState({
     countryCode: '',
     status: HOLIDAY_PRELOAD_STATUS.idle,
   });
   const [hostedUrl, setHostedUrl] = useState('');
-  const [hostedEmail, setHostedEmail] = useState(() => {
-    if (typeof window === 'undefined') {
-      return '';
-    }
-
-    return window.localStorage.getItem(HOSTED_EMAIL_STORAGE_KEY) || '';
-  });
   const [hostedPassword, setHostedPassword] = useState('');
-  const [hostedDeviceName, setHostedDeviceName] = useState(() => {
-    if (typeof window === 'undefined') {
-      return '';
-    }
-
-    return window.localStorage.getItem(HOSTED_DEVICE_NAME_STORAGE_KEY) || '';
-  });
   const [hostedBusyAction, setHostedBusyAction] = useState('');
   const [hostedStatusMessage, setHostedStatusMessage] = useState('');
   const snapshotRef = useRef(null);
@@ -211,37 +222,16 @@ function App() {
   }, [snapshot]);
 
   useEffect(() => {
-    const nextBaseUrl = snapshot?.security?.hosted?.baseUrl;
-    if (!hostedUrl && nextBaseUrl) {
-      setHostedUrl(nextBaseUrl);
+    if (!hostedUrl && snapshot?.security?.hosted?.baseUrl) {
+      setHostedUrl(snapshot.security.hosted.baseUrl);
     }
   }, [snapshot?.security?.hosted?.baseUrl, hostedUrl]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    window.localStorage.setItem(HOSTED_EMAIL_STORAGE_KEY, hostedEmail);
-  }, [hostedEmail]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    window.localStorage.setItem(HOSTED_DEVICE_NAME_STORAGE_KEY, hostedDeviceName);
-  }, [hostedDeviceName]);
+    setCalendarView(preferences.defaultView);
+  }, [preferences.defaultView]);
 
   const allEvents = snapshot?.events || [];
-
-  const persistSetupComplete = (isComplete) => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    window.localStorage.setItem(SETUP_COMPLETE_STORAGE_KEY, isComplete ? 'true' : 'false');
-  };
 
   const clearHolidayPreload = () => {
     holidayPreloadRequestRef.current += 1;
@@ -268,7 +258,7 @@ function App() {
       const preloadResult = await window.calendarApp.preloadHolidays({
         countryCode,
         years: getHolidaySeedYears(),
-        timeZone: userTimeZone,
+        timeZone: preferences.timeZone || detectedTimeZone,
       });
 
       if (holidayPreloadRequestRef.current !== requestId) {
@@ -297,55 +287,49 @@ function App() {
     }
   };
 
-  const applySetupPreferences = async ({ countryCode, timeZone }) => {
+  const importHolidayPreferences = async ({ countryCode, timeZone, name }) => {
     const nextTimeZone = timeZone || detectedTimeZone;
-    setUserCountryCode(countryCode || '');
-    setUserTimeZone(nextTimeZone);
+    updatePreference(setPreferences, {
+      countryCode: countryCode || '',
+      timeZone: nextTimeZone,
+      name: typeof name === 'string' ? name : preferences.name,
+    });
     setIsSetupComplete(true);
-    persistSetupComplete(true);
+    window.localStorage.setItem(STORAGE_KEYS.setupComplete, 'true');
 
-    if (countryCode) {
-      void window.calendarApp
-        .importHolidays({
-          countryCode,
-          years: getHolidaySeedYears(),
-          timeZone: nextTimeZone,
-        })
-        .then((result) => {
-          if (result?.snapshot) {
-            snapshotRef.current = result.snapshot;
-            setSnapshot(result.snapshot);
-          }
-
-          if (result?.warning) {
-            setHolidayPreloadState({
-              countryCode,
-              status: HOLIDAY_PRELOAD_STATUS.error,
-            });
-          }
-        })
-        .catch(() => {
-          setHolidayPreloadState({
-            countryCode,
-            status: HOLIDAY_PRELOAD_STATUS.error,
-          });
-        });
+    if (!countryCode) {
+      return { warning: '' };
     }
 
-    return {
-      warning:
-        countryCode &&
-        holidayPreloadState.countryCode === countryCode &&
-        holidayPreloadState.status === HOLIDAY_PRELOAD_STATUS.error
-          ? 'Settings were saved, but holidays could not be imported right now.'
-          : '',
-    };
+    try {
+      const result = await window.calendarApp.importHolidays({
+        countryCode,
+        years: getHolidaySeedYears(),
+        timeZone: nextTimeZone,
+      });
+
+      if (result?.snapshot) {
+        snapshotRef.current = result.snapshot;
+        setSnapshot(result.snapshot);
+      }
+
+      return {
+        warning: result?.warning || '',
+      };
+    } catch {
+      setHolidayPreloadState({
+        countryCode,
+        status: HOLIDAY_PRELOAD_STATUS.error,
+      });
+      return {
+        warning: 'Settings were saved, but holidays could not be imported right now.',
+      };
+    }
   };
 
   const handleSkipSetup = () => {
     setIsSetupComplete(true);
-    persistSetupComplete(true);
-    setIsSetupOpen(false);
+    window.localStorage.setItem(STORAGE_KEYS.setupComplete, 'true');
   };
 
   const availableTags = useMemo(
@@ -356,6 +340,10 @@ function App() {
   const events = useMemo(
     () =>
       allEvents.filter((event) => {
+        if (!preferences.showCompletedTasks && event.type === 'task' && event.completed) {
+          return false;
+        }
+
         const eventStart = new Date(event.startsAt);
         const matchesSearch =
           !normalizedSearchQuery ||
@@ -367,8 +355,8 @@ function App() {
           quickFilter === 'all' ||
           (quickFilter === 'today' && isSameDay(eventStart, new Date())) ||
           (quickFilter === 'week' &&
-            eventStart >= startOfWeek(new Date(), userTimeZone) &&
-            eventStart < endOfWeek(new Date(), userTimeZone)) ||
+            eventStart >= startOfWeek(new Date(), preferences.timeZone, preferences.weekStartsOn) &&
+            eventStart < endOfWeek(new Date(), preferences.timeZone, preferences.weekStartsOn)) ||
           (quickFilter === 'month' &&
             eventStart >= startOfMonth(new Date()) &&
             eventStart < endOfMonth(new Date()));
@@ -380,11 +368,26 @@ function App() {
 
         return matchesSearch && matchesQuickFilter && matchesTags;
       }),
-    [allEvents, normalizedSearchQuery, quickFilter, activeTagFilters, userTimeZone]
+    [
+      allEvents,
+      normalizedSearchQuery,
+      quickFilter,
+      activeTagFilters,
+      preferences.showCompletedTasks,
+      preferences.timeZone,
+      preferences.weekStartsOn,
+    ]
   );
   const visibleEvents = useMemo(
-    () => getVisibleEventsForView(events, calendarView, selectedDate, userTimeZone),
-    [events, calendarView, selectedDate, userTimeZone]
+    () =>
+      getVisibleEventsForView(
+        events,
+        calendarView,
+        selectedDate,
+        preferences.timeZone,
+        preferences.weekStartsOn
+      ),
+    [events, calendarView, selectedDate, preferences.timeZone, preferences.weekStartsOn]
   );
 
   const upcomingDays = useMemo(
@@ -393,27 +396,28 @@ function App() {
         const startsAt = new Date(event.startsAt);
         return {
           id: event.id,
-          day: startsAt.toLocaleDateString('en-US', { weekday: 'short' }),
-          date: startsAt.toLocaleDateString('en-US', {
+          day: startsAt.toLocaleDateString(undefined, { weekday: 'short' }),
+          date: startsAt.toLocaleDateString(undefined, {
             month: 'short',
             day: 'numeric',
           }),
-          time: startsAt.toLocaleTimeString('en-US', {
+          time: new Intl.DateTimeFormat(undefined, {
             hour: 'numeric',
             minute: '2-digit',
-          }),
+            hour12: preferences.timeFormat === '12h',
+          }).format(startsAt),
           focus: event.title,
           startsAt,
         };
       }),
-    [events]
+    [events, preferences.timeFormat]
   );
 
   const openComposer = (date = new Date()) => {
     setActiveEvent(null);
     setComposerMode('create');
     setSelectedDate(date);
-    setDraftEvent(createEmptyDraftEvent(date));
+    setDraftEvent(createEmptyDraftEvent(date, preferences.defaultEventDuration));
     setDraftTag(createEmptyDraftTag());
     setIsComposerOpen(true);
   };
@@ -434,10 +438,21 @@ function App() {
 
   const handleDraftChange = (event) => {
     const { name, value } = event.target;
-    setDraftEvent((current) => ({
-      ...current,
-      [name]: value,
-    }));
+
+    setDraftEvent((current) => {
+      const nextDraft = {
+        ...current,
+        [name]: value,
+      };
+
+      if (name === 'type' && value === 'task' && !current.endTime) {
+        const startDate = new Date(`${current.date}T${current.time}:00`);
+        startDate.setMinutes(startDate.getMinutes() + preferences.defaultTaskDuration);
+        nextDraft.endTime = startDate.toTimeString().slice(0, 5);
+      }
+
+      return nextDraft;
+    });
   };
 
   const handleDraftTagChange = (event) => {
@@ -448,12 +463,12 @@ function App() {
     }));
   };
 
-  const handleAddTag = (availableTags = []) => {
+  const handleAddTag = (nextAvailableTags = []) => {
     if (!draftTag.label.trim()) {
       return;
     }
 
-    const matchingTag = availableTags.find(
+    const matchingTag = nextAvailableTags.find(
       (tag) => tag.label.toLowerCase() === draftTag.label.trim().toLowerCase()
     );
 
@@ -555,12 +570,14 @@ function App() {
     const startsAt = new Date(`${draftEvent.date}T${draftEvent.time}:00`);
     const endsAt =
       draftEvent.type === 'task'
-        ? new Date(new Date(`${draftEvent.date}T${draftEvent.time}:00`).getTime() + 30 * 60 * 1000)
+        ? new Date(
+            new Date(`${draftEvent.date}T${draftEvent.time}:00`).getTime() +
+              preferences.defaultTaskDuration * 60 * 1000
+          )
         : new Date(`${draftEvent.date}T${draftEvent.endTime}:00`);
 
     if (endsAt <= startsAt) {
-      endsAt.setHours(startsAt.getHours() + 1);
-      endsAt.setMinutes(startsAt.getMinutes());
+      endsAt.setMinutes(startsAt.getMinutes() + preferences.defaultEventDuration);
     }
 
     const nextSnapshot =
@@ -630,8 +647,8 @@ function App() {
       setHostedStatusMessage(fallbackMessage);
       try {
         await refreshSnapshot();
-      } catch (_refreshError) {
-        // Keep the current UI state if the store snapshot cannot be reloaded.
+      } catch {
+        // Keep current UI state if refresh fails.
       }
       return null;
     } finally {
@@ -641,12 +658,12 @@ function App() {
 
   const buildHostedCredentials = () => ({
     baseUrl: hostedUrl,
-    email: hostedEmail,
+    email: preferences.hostedEmail,
     password: hostedPassword,
-    deviceName: hostedDeviceName,
+    deviceName: preferences.hostedDeviceName,
   });
 
-  if (!isSetupComplete) {
+  if (!isSetupComplete && windowMode === 'main') {
     return (
       <Introduction
         isOpen
@@ -654,20 +671,109 @@ function App() {
         preloadState={holidayPreloadState}
         onCountryChange={prepareHolidayPreload}
         onOpenChange={() => {}}
-        onSavePreferences={applySetupPreferences}
+        onSavePreferences={importHolidayPreferences}
         onSkip={handleSkipSetup}
       />
     );
   }
 
+  if (windowMode === 'settings') {
+    return (
+      <>
+        <div className="app-background-layer" aria-hidden="true" />
+        <SettingsWindow
+          snapshot={snapshot}
+          preferences={preferences}
+          setPreferences={setPreferences}
+          effectiveTheme={effectiveTheme}
+          holidayPreloadState={holidayPreloadState}
+          onCountryChange={prepareHolidayPreload}
+          onImportHolidays={importHolidayPreferences}
+          hosted={snapshot?.security?.hosted}
+          hostedUrl={hostedUrl}
+          onHostedUrlChange={setHostedUrl}
+          hostedPassword={hostedPassword}
+          onHostedPasswordChange={setHostedPassword}
+          onHostedTestConnection={() =>
+            handleHostedAction(
+              'test-connection',
+              () => window.calendarApp.testHostedConnection(hostedUrl),
+              'Hosted backend is reachable and supports SelfHdb password sign-in.'
+            )
+          }
+          onHostedRegister={() =>
+            handleHostedAction(
+              'register',
+              () => window.calendarApp.registerHostedAccount(buildHostedCredentials()),
+              'Hosted account created and this device is now connected.'
+            ).then((result) => {
+              if (result) {
+                setHostedPassword('');
+              }
+            })
+          }
+          onHostedSignIn={() =>
+            handleHostedAction(
+              'login',
+              () => window.calendarApp.loginHostedAccount(buildHostedCredentials()),
+              'Hosted sign-in completed.'
+            ).then((result) => {
+              if (result) {
+                setHostedPassword('');
+              }
+            })
+          }
+          onSyncHostedNow={() =>
+            handleHostedAction(
+              'sync',
+              () => window.calendarApp.syncHostedNow(),
+              'Hosted sync completed.'
+            )
+          }
+          onDisconnectHostedSync={() =>
+            handleHostedAction(
+              'disconnect',
+              () => window.calendarApp.disconnectHostedSync(),
+              'Hosted backend disconnected on this device.'
+            )
+          }
+          onExportHostedEnv={(values) =>
+            handleHostedAction(
+              'export-env',
+              () =>
+                window.calendarApp.exportHostedEnv({
+                  ...values,
+                  APP_URL: values?.APP_URL || hostedUrl,
+                }),
+              ''
+            ).then((result) => {
+              if (result?.canceled) {
+                setHostedStatusMessage('SelfHdb .env export was cancelled.');
+                return;
+              }
+
+              if (result?.filePath) {
+                setHostedStatusMessage(`SelfHdb .env exported to ${result.filePath}.`);
+              }
+            })
+          }
+          hostedBusyAction={hostedBusyAction}
+          hostedStatusMessage={hostedStatusMessage}
+        />
+      </>
+    );
+  }
+
   return (
     <>
+      <div className="app-background-layer" aria-hidden="true" />
       <div className="app-shell overflow-hidden">
         <Sidebar
           availableTags={availableTags}
           events={events}
           visibleEvents={visibleEvents}
-          timeZone={userTimeZone}
+          preferences={preferences}
+          timeZone={preferences.timeZone}
           selectedDate={selectedDate}
           onSelectDate={setSelectedDate}
           onCreateEvent={openComposer}
@@ -690,18 +796,10 @@ function App() {
             eventCount={snapshot?.stats?.activeEventCount || 0}
             onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
             onOpenAbout={() => setIsAboutOpen(true)}
-            timeZone={userTimeZone}
-            onToggleSetup={() => setIsSetupOpen((current) => !current)}
-            isSetupOpen={isSetupOpen}
-          />
-
-          <Introduction
-            isOpen={isSetupOpen}
-            variant="panel"
-            onOpenChange={setIsSetupOpen}
-            preloadState={holidayPreloadState}
-            onCountryChange={prepareHolidayPreload}
-            onSavePreferences={applySetupPreferences}
+            onOpenSettings={() => {
+              void openSettingsExperience();
+            }}
+            timeZone={preferences.timeZone}
           />
 
           <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -720,8 +818,9 @@ function App() {
             <CalendarViewport
               calendarView={calendarView}
               events={events}
+              preferences={preferences}
               selectedDate={selectedDate}
-              timeZone={userTimeZone}
+              timeZone={preferences.timeZone}
               onSelectDate={setSelectedDate}
               onCreateEvent={openComposer}
               onSelectEvent={setActiveEvent}
@@ -736,9 +835,9 @@ function App() {
               <EventOverviewPopover
                 event={activeEvent}
                 onClose={() => setActiveEvent(null)}
-                onEdit={(event) => {
+                onEdit={(currentEvent) => {
                   setActiveEvent(null);
-                  openEditComposer(event);
+                  openEditComposer(currentEvent);
                 }}
                 onDelete={handleDeleteEvent}
               />
@@ -792,80 +891,6 @@ function App() {
         changeCount={snapshot?.stats?.changeCount || 0}
         activeEventCount={snapshot?.stats?.activeEventCount || 0}
         security={snapshot?.security}
-        hostedUrl={hostedUrl}
-        onHostedUrlChange={setHostedUrl}
-        hostedEmail={hostedEmail}
-        onHostedEmailChange={setHostedEmail}
-        hostedPassword={hostedPassword}
-        onHostedPasswordChange={setHostedPassword}
-        hostedDeviceName={hostedDeviceName}
-        onHostedDeviceNameChange={setHostedDeviceName}
-        onHostedTestConnection={() =>
-          handleHostedAction(
-            'test-connection',
-            () => window.calendarApp.testHostedConnection(hostedUrl),
-            'Hosted backend is reachable and supports SelfHdb password sign-in.'
-          )
-        }
-        onHostedRegister={() =>
-          handleHostedAction(
-            'register',
-            () => window.calendarApp.registerHostedAccount(buildHostedCredentials()),
-            'Hosted account created and this device is now connected.'
-          ).then((result) => {
-            if (result) {
-              setHostedPassword('');
-            }
-          })
-        }
-        onHostedSignIn={() =>
-          handleHostedAction(
-            'login',
-            () => window.calendarApp.loginHostedAccount(buildHostedCredentials()),
-            'Hosted sign-in completed.'
-          ).then((result) => {
-            if (result) {
-              setHostedPassword('');
-            }
-          })
-        }
-        onSyncHostedNow={() =>
-          handleHostedAction(
-            'sync',
-            () => window.calendarApp.syncHostedNow(),
-            'Hosted sync completed.'
-          )
-        }
-        onDisconnectHostedSync={() =>
-          handleHostedAction(
-            'disconnect',
-            () => window.calendarApp.disconnectHostedSync(),
-            'Hosted backend disconnected on this device.'
-          )
-        }
-        onExportHostedEnv={(values) =>
-          handleHostedAction(
-            'export-env',
-            () =>
-              window.calendarApp.exportHostedEnv({
-                ...values,
-                APP_URL: values?.APP_URL || hostedUrl,
-              }),
-            ''
-          )
-            .then((result) => {
-              if (result?.canceled) {
-                setHostedStatusMessage('SelfHdb .env export was cancelled.');
-                return;
-              }
-
-              if (result?.filePath) {
-                setHostedStatusMessage(`SelfHdb .env exported to ${result.filePath}.`);
-              }
-            })
-        }
-        hostedBusyAction={hostedBusyAction}
-        hostedStatusMessage={hostedStatusMessage}
       />
     </>
   );

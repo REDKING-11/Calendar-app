@@ -33,13 +33,13 @@ export default function EventOverviewPopover({
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">Event overview</p>
-          <h3 className="m-0 text-2xl font-semibold tracking-tight text-slate-900">
+          <h3 className="m-0 text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
             {event.title}
           </h3>
         </div>
         <button
           type="button"
-          className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2 text-slate-800 transition hover:bg-white"
+          className="app-button app-button--secondary"
           onClick={onClose}
         >
           Close
@@ -134,7 +134,7 @@ export default function EventOverviewPopover({
               ))}
             </div>
           ) : (
-            <p className="event-overview-value text-slate-500">No tags</p>
+            <p className="event-overview-value app-text-soft">No tags</p>
           )}
         </div>
       </div>
@@ -142,14 +142,14 @@ export default function EventOverviewPopover({
       <div className="mt-5 flex justify-end gap-2.5">
         <button
           type="button"
-          className="rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-red-700 transition hover:bg-red-100"
+          className="app-button app-danger-button"
           onClick={() => onDelete?.(event)}
         >
           Delete
         </button>
         <button
           type="button"
-          className="rounded-full bg-slate-900 px-4 py-2.5 text-white transition hover:bg-slate-800"
+          className="app-button app-button--primary"
           onClick={() => onEdit?.(event)}
         >
           Edit event

@@ -1,0 +1,171 @@
+Here’s the full rundown of what I did in this chat, in order.
+
+**Big App Changes**
+We first worked on turning the app into a fuller calendar product instead of just a single main window with an About panel. The main direction was:
+- create a dedicated `Settings` window in Electron
+- move the self-hosted sync setup out of `About` and into `Settings`
+- keep `About` as a lighter info surface
+- add a persistent theme system with `Light`, `Dark`, and `System`
+- improve the visual system so buttons, borders, inputs, cards, drawers, and popovers all follow the new theme tokens
+
+The main files involved in that phase were:
+- [Application/src/main.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/main.js)
+- [Application/src/preload.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/preload.js)
+- [Application/src/renderer/renderer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/renderer.jsx)
+- [Application/src/renderer/components/SettingsWindow.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/SettingsWindow.jsx)
+- [Application/src/renderer/components/HostedSyncPanel.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/HostedSyncPanel.jsx)
+- [Application/src/renderer/components/AboutDrawer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/AboutDrawer.jsx)
+- [Application/src/renderer/components/Header.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Header.jsx)
+- [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css)
+
+**Settings / Theme Work**
+That phase included:
+- splitting renderer boot modes so the same renderer bundle could run as main app or settings window
+- adding a dedicated Settings surface with sections for appearance, profile/region, calendar preferences, sync, and app info
+- moving SelfHdb sync controls into Settings
+- cleaning up About so it no longer carried those editable sync controls
+- adding theme preferences and shared local storage-backed settings
+- adding light/dark/system theme handling
+- introducing CSS variables and semantic theme tokens for surfaces, text, borders, accent colors, and interactive states
+- adding animated background layers for both light and dark themes
+- improving general button/input styling with clearer borders, hover, and focus states
+
+**Fixes After That**
+You then reported a few issues, and I addressed them one by one.
+
+1. `Settings` button crash:
+- the app was throwing `No handler registered for 'app:openSettingsWindow'`
+- I updated the renderer/preload behavior so the button wouldn’t hard-crash and could fall back more safely if the main-process handler wasn’t live yet
+
+2. Settings window scroll:
+- you couldn’t scroll in Settings
+- I adjusted the settings container CSS so it owned the viewport properly and had vertical overflow enabled
+
+3. Theme mismatch / CSS inconsistency:
+- you pointed out mixed colors and non-animated backgrounds
+- I refactored the styling system further so more components used theme-driven classes instead of hardcoded whites/blacks/slate colors
+- I also reworked the animated background layer to be more visible
+
+That part touched components like:
+- [Application/src/renderer/components/Sidebar.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Sidebar.jsx)
+- [Application/src/renderer/components/EventComposerDrawer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/EventComposerDrawer.jsx)
+- [Application/src/renderer/components/UpcomingPopover.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/UpcomingPopover.jsx)
+- [Application/src/renderer/components/EventOverviewPopover.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/EventOverviewPopover.jsx)
+- [Application/src/renderer/components/Views/TodayScheduleControl.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Views/TodayScheduleControl.jsx)
+- [Application/src/renderer/components/introduction.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/introduction.jsx)
+- and again [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css)
+
+**Sidebar Month / Year Picker Work**
+Then we focused heavily on the sidebar mini-calendar header.
+
+You wanted:
+- no more bad month scrolling behavior
+- year to be directly changeable
+- month and year in one shared control
+- a year picker popup
+- wheel support to still work appropriately
+- cleaner arrows
+- correct popup positioning and cleaner CSS
+
+The main file for that was:
+- [Application/src/renderer/components/Sidebar.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Sidebar.jsx)
+- plus lots of CSS work in [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css)
+
+What I changed there over several iterations:
+
+1. Initial year-picker support
+- removed the old wheel-based whole-header month switching
+- split the old combined month/year label into separate month and year controls
+- added `isYearPickerOpen`
+- added a generated year list around the current year
+- let clicking year select a different year
+
+2. Combined control UI
+- merged month and year into one shared visual bar
+- added a divider between them
+- kept them as separate interactive regions
+
+3. Control sizing / rounded styling fixes
+- tightened the control width so month wasn’t leaving excessive blank space
+- made the shared wrapper rounded
+- removed wrapper styles that were visually creating a square/cube over the rounded shell
+- made only the real control visible instead of wrapper divs influencing shape
+
+4. Arrow button styling
+- replaced plain text arrows with styled circular arrow buttons
+
+5. Restored separate wheel behavior
+- month wheel changes month
+- year wheel changes year
+- year list itself remains scrollable
+
+6. Dropdown cleanup
+- fixed the month dropdown being crushed into a narrow broken column
+- fixed the year popup not opening properly
+- rebuilt the popup widths and alignment so they don’t inherit tiny trigger sizes
+
+7. CSS recode for the shared control
+I eventually rewrote the CSS specifically for:
+- `.sidebar-period-picker`
+- `.sidebar-period-control`
+- `.sidebar-period-segment`
+- `.sidebar-month-picker-anchor`
+- `.sidebar-year-picker-anchor`
+- `.sidebar-month-trigger`
+- `.sidebar-period-divider`
+- `.sidebar-month-picker`
+- `.sidebar-year-picker`
+- `.sidebar-month-option`
+- `.sidebar-year-option`
+
+That recode made:
+- `.sidebar-period-control` the only visible rounded shell
+- `.sidebar-period-segment` layout-only
+- button segments own their own corner rounding
+- divider stay as a clean 1px rule
+- month popup open from the month segment
+- year popup open from the year segment
+- month/year option buttons use theme tokens
+- later generic button styles overridden where they were interfering
+
+8. Year button visual alignment
+- you pointed out the year segment looked visually stuck “in the wall”
+- I adjusted the year segment content alignment and padding so the `2026` label sat more naturally inside its half of the control
+
+9. Year popup centering
+- you asked specifically how to move only the panel, not the anchor/button
+- I explained that the anchor should stay put and only the popup should move
+- after that I implemented the centered popup positioning by changing the live year picker rule from edge alignment/hack offset to:
+  - `left: 50%`
+  - `right: auto`
+  - `transform: translateX(-50%)`
+
+That last change is in:
+- [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css)
+
+**Planning Turns**
+A few times during the chat I was temporarily in plan mode, so instead of editing immediately I produced formal implementation plans. Those were for:
+- the dedicated settings window + theme refresh
+- the theme-system CSS cleanup + animated background pass
+- the sidebar period-picker CSS recode
+- centering the year picker under the year button
+
+Once plan mode ended again, I implemented the requested plan.
+
+**What I Explored / Verified**
+During the chat I also:
+- inspected `Sidebar.jsx` and `styles.css` multiple times
+- searched for the current live CSS blocks before patching them
+- tried a Babel syntax check once, but it failed because `@babel/core` wasn’t installed in that workspace
+- used direct file inspection to verify that the new sidebar state and CSS blocks existed
+- avoided destructive operations and edited files with patches
+
+**Main Files Touched Most In This Chat**
+The highest-impact files in this whole conversation were:
+- [Application/src/renderer/styles.css](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/styles.css)
+- [Application/src/renderer/components/Sidebar.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/components/Sidebar.jsx)
+- [Application/src/renderer/renderer.jsx](/C:/Users/REDKING/Projects/Calendar-app/Application/src/renderer/renderer.jsx)
+- [Application/src/preload.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/preload.js)
+- [Application/src/main.js](/C:/Users/REDKING/Projects/Calendar-app/Application/src/main.js)
+
+If you want, I can also give you a second version of this summary as a strict changelog grouped by file, with just the concrete edits in each file and no narrative.

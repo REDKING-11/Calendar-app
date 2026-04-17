@@ -211,10 +211,3 @@ The main remaining gap I explicitly called out was live Electron window testing.
 
 **Important caveat**
 There were a few moments where I gave source-level confirmations without live UI execution. So the work was implemented in code and syntax/test checked where possible, but not every visual/runtime path was manually exercised in the running Electron app.
-
-If you want, I can turn this into a cleaner changelog grouped by:
-- frontend/UI
-- holidays/setup
-- tags
-- backend/SelfHdb
-- self-host connection system

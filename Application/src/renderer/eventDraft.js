@@ -29,11 +29,11 @@ export function createDraftTagId() {
   return `draft_tag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function createEmptyDraftEvent(date = new Date()) {
+export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60) {
   const defaultTime =
     date.getHours() === 0 && date.getMinutes() === 0 ? '09:00' : formatTimeForInput(date);
   const endDate = new Date(date);
-  endDate.setHours(endDate.getHours() + 1);
+  endDate.setMinutes(endDate.getMinutes() + durationMinutes);
 
   return {
     title: '',

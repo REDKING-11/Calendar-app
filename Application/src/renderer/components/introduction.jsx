@@ -218,28 +218,28 @@ export default function Introduction({
       <div
         className={
           isOnboarding
-            ? 'w-full max-w-4xl rounded-[36px] border border-slate-900/8 bg-white/78 p-8 shadow-[0_36px_90px_rgba(36,52,89,0.16)] backdrop-blur-xl md:p-10'
+            ? 'intro-surface w-full max-w-4xl rounded-[36px] p-8 md:p-10'
             : 'w-full'
         }
       >
         {isOnboarding ? (
           <div className="mb-8 flex flex-col gap-4">
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-700">
+            <p className="settings-section-eyebrow">
               First launch setup
             </p>
-            <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 md:text-5xl">
+            <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-[var(--text-primary)] md:text-5xl">
               Start with the basics, then adjust anything later.
             </h1>
-            <p className="max-w-3xl text-base leading-7 text-slate-600 md:text-lg">
+            <p className="max-w-3xl text-base leading-7 app-text-muted md:text-lg">
               Everything here is optional. Country helps us narrow timezone choices and prepare
               public holidays in the background. Timezone helps the calendar show the right local
-              time and week start. You can change any of this later from Quick setup.
+              time and week start. You can change any of this later from Settings.
             </p>
           </div>
         ) : (
           <div className="mb-4 flex flex-col gap-2">
-            <h2 className="text-lg font-semibold text-slate-900">Quick setup</h2>
-            <p className="text-sm text-slate-600">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Getting started</h2>
+            <p className="text-sm app-text-muted">
               Everything is optional. Country narrows timezone choices and prepares public
               holidays. Timezone controls how your calendar is shown.
             </p>
@@ -251,11 +251,11 @@ export default function Introduction({
           className={
             isOnboarding
               ? 'grid gap-5 md:grid-cols-[1.15fr_1fr] xl:grid-cols-[1.15fr_1fr_0.9fr]'
-              : 'grid gap-4 rounded-[24px] border border-slate-900/8 bg-white/70 p-5 shadow-[0_18px_50px_rgba(36,52,89,0.10)] backdrop-blur-md md:grid-cols-[1.1fr_1fr_0.9fr_auto]'
+              : 'intro-form-surface grid gap-4 rounded-[24px] p-5 md:grid-cols-[1.1fr_1fr_0.9fr_auto]'
           }
         >
           <div className="grid gap-2">
-            <label htmlFor="countryCode" className="text-sm font-medium text-slate-700">
+            <label htmlFor="countryCode" className="text-sm font-medium app-text-muted">
               Country
             </label>
             <select
@@ -263,7 +263,7 @@ export default function Introduction({
               name="countryCode"
               value={formData.countryCode}
               onChange={handleChange}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className="app-input rounded-xl px-4 py-3"
             >
               <option value="">No country selected</option>
               {countries.map((country) => (
@@ -272,15 +272,13 @@ export default function Introduction({
                 </option>
               ))}
             </select>
-            <p className="text-sm leading-6 text-slate-500">
+            <p className="text-sm leading-6 app-text-soft">
               Optional. Picking a country lets us narrow timezone options and prepare default
               public holidays for you.
             </p>
             {backgroundStatusMessage ? (
               <p
-                className={`text-sm ${
-                  preloadState.status === 'error' ? 'text-amber-700' : 'text-slate-600'
-                }`}
+                className={`text-sm ${preloadState.status === 'error' ? 'settings-inline-warning' : 'app-text-muted'}`}
               >
                 {backgroundStatusMessage}
               </p>
@@ -288,7 +286,7 @@ export default function Introduction({
           </div>
 
           <div className="grid gap-2">
-            <label htmlFor="timeZone" className="text-sm font-medium text-slate-700">
+            <label htmlFor="timeZone" className="text-sm font-medium app-text-muted">
               Timezone
             </label>
             <select
@@ -296,7 +294,7 @@ export default function Introduction({
               name="timeZone"
               value={formData.timeZone}
               onChange={handleChange}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className="app-input rounded-xl px-4 py-3"
             >
               <option value="">Use detected system timezone</option>
               {filteredTimeZones.map((timeZone) => (
@@ -305,22 +303,22 @@ export default function Introduction({
                 </option>
               ))}
             </select>
-            <p className="text-sm leading-6 text-slate-500">
+            <p className="text-sm leading-6 app-text-soft">
               Optional. Timezone keeps event times and week boundaries aligned with how you want
               the calendar to behave.
             </p>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm app-text-soft">
               {formData.countryCode
                 ? hasMappedTimeZones
                   ? 'Showing timezones commonly used for the selected country.'
                   : 'We do not have a local timezone map for this country yet, so the full list is shown.'
                 : 'Choose a country first if you want a shorter timezone list.'}
             </p>
-            {fieldMessage ? <p className="text-sm text-amber-700">{fieldMessage}</p> : null}
+            {fieldMessage ? <p className="text-sm settings-inline-warning">{fieldMessage}</p> : null}
           </div>
 
           <div className="grid gap-2">
-            <label htmlFor="name" className="text-sm font-medium text-slate-700">
+            <label htmlFor="name" className="text-sm font-medium app-text-muted">
               Name
             </label>
             <input
@@ -330,9 +328,9 @@ export default function Introduction({
               value={formData.name}
               onChange={handleChange}
               placeholder="Optional"
-              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className="app-input rounded-xl px-4 py-3"
             />
-            <p className="text-sm leading-6 text-slate-500">
+            <p className="text-sm leading-6 app-text-soft">
               Optional. This personalizes a few friendly parts of the app.
             </p>
           </div>
@@ -347,7 +345,7 @@ export default function Introduction({
             <button
               type="submit"
               disabled={isSaving}
-              className="rounded-full bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-wait disabled:opacity-80"
+              className="app-button app-button--primary disabled:cursor-wait disabled:opacity-80"
             >
               {isSaving ? 'Saving...' : isOnboarding ? 'Finish setup' : 'Save'}
             </button>
@@ -355,7 +353,7 @@ export default function Introduction({
               <button
                 type="button"
                 onClick={handleSkip}
-                className="rounded-full border border-slate-900/12 bg-white/85 px-5 py-3 text-sm font-medium text-slate-700 transition hover:bg-white"
+                className="app-button app-button--secondary"
               >
                 Skip for now
               </button>
@@ -364,7 +362,7 @@ export default function Introduction({
         </form>
 
         {statusMessage ? (
-          <p className="mt-4 px-1 text-sm text-amber-700">{statusMessage}</p>
+          <p className="settings-feedback settings-feedback--warning">{statusMessage}</p>
         ) : null}
       </div>
     </section>

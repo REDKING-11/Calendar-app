@@ -2,19 +2,13 @@ import React, { useMemo } from 'react';
 import { buildWeekDays, startOfWeek } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
+import { formatTime } from '../../formatting';
 
 const HOUR_HEIGHT = 64;
 const HOURS = Array.from({ length: 24 }, (_, index) => index);
 const HOUR_LABELS = Array.from({ length: 25 }, (_, index) =>
   `${String(index).padStart(2, '0')}:00`
 );
-function formatTime(dateString) {
-  return new Date(dateString).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function formatTypeLabel(type) {
   if (!type) {
     return 'Event';
@@ -60,6 +54,7 @@ function getEventLayout(event) {
 
 export default function WeekView({
   events,
+  preferences,
   timeZone,
   selectedDate,
   onSelectDate,
@@ -69,8 +64,8 @@ export default function WeekView({
   onChangeView,
 }) {
   const weekDays = useMemo(
-    () => buildWeekDays(selectedDate, events, timeZone),
-    [selectedDate, events, timeZone]
+    () => buildWeekDays(selectedDate, events, timeZone, preferences?.weekStartsOn),
+    [selectedDate, events, timeZone, preferences?.weekStartsOn]
   );
 
   const selectedDay = weekDays.find((day) => day.isSelected) || weekDays[0];
@@ -79,13 +74,13 @@ export default function WeekView({
   const goToPreviousWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() - 7);
-    onSelectDate?.(startOfWeek(nextDate, timeZone));
+    onSelectDate?.(startOfWeek(nextDate, timeZone, preferences?.weekStartsOn));
   };
 
   const goToNextWeek = () => {
     const nextDate = new Date(selectedDate);
     nextDate.setDate(nextDate.getDate() + 7);
-    onSelectDate?.(startOfWeek(nextDate, timeZone));
+    onSelectDate?.(startOfWeek(nextDate, timeZone, preferences?.weekStartsOn));
   };
 
   const goToToday = () => {
@@ -106,7 +101,7 @@ export default function WeekView({
         previousLabel="Previous week"
         nextLabel="Next week"
         onAddEvent={() => onCreateEvent?.(selectedDate)}
-        secondaryAction={<TodayScheduleControl events={events} />}
+        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
       <div className="week-timeline min-h-0 flex-1">
@@ -187,7 +182,7 @@ export default function WeekView({
                           : formatTypeLabel(event.type)}
                       </p>
                       <p className="week-event-time">
-                        {formatTime(event.startsAt)} - {formatTime(event.endsAt)}
+                        {formatTime(event.startsAt, preferences)} - {formatTime(event.endsAt, preferences)}
                       </p>
                       {event.tags?.length ? (
                         <div className="event-inline-tag-list">
@@ -238,7 +233,7 @@ export default function WeekView({
                   className="day-detail-item-button"
                   onClick={() => onSelectEvent?.(event)}
                 >
-                <p className="day-detail-time">{formatTime(event.startsAt)}</p>
+                <p className="day-detail-time">{formatTime(event.startsAt, preferences)}</p>
                 <div>
                   <p className="day-detail-title">{formatEventHeading(event)}</p>
                   <p className="day-detail-subtle">
@@ -266,7 +261,7 @@ export default function WeekView({
                     </div>
                   ) : null}
                   <p className="day-detail-subtle">
-                    Ends at {formatTime(event.endsAt)}
+                    Ends at {formatTime(event.endsAt, preferences)}
                   </p>
                 </div>
                 </button>

@@ -49,10 +49,10 @@ export default function CalendarViewHeader({
           <button
             key={view}
             type="button"
-            className={`rounded-full px-4 py-2.5 text-sm font-medium transition ${
+            className={`calendar-view-toggle rounded-full px-4 py-2.5 text-sm font-medium transition ${
               calendarView === view
-                ? 'bg-slate-900 text-white'
-                : 'border border-slate-900/12 bg-white/85 text-slate-800 hover:bg-white'
+                ? 'calendar-view-toggle--active'
+                : ''
             }`}
             onClick={() => onChangeView?.(view)}
           >

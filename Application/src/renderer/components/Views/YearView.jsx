@@ -5,6 +5,7 @@ import TodayScheduleControl from './TodayScheduleControl';
 
 export default function YearView({
   events,
+  preferences,
   timeZone,
   selectedDate,
   onSelectMonth,
@@ -14,10 +15,13 @@ export default function YearView({
   onChangeView,
 }) {
   const months = useMemo(
-    () => buildYearMonths(selectedDate, events, timeZone),
-    [selectedDate, events, timeZone]
+    () => buildYearMonths(selectedDate, events, timeZone, preferences?.weekStartsOn),
+    [selectedDate, events, timeZone, preferences?.weekStartsOn]
   );
-  const weekdayLabels = useMemo(() => getWeekdayLabels(timeZone), [timeZone]);
+  const weekdayLabels = useMemo(
+    () => getWeekdayLabels(timeZone, preferences?.weekStartsOn),
+    [timeZone, preferences?.weekStartsOn]
+  );
 
   const goToPreviousYear = () => {
     const nextDate = new Date(selectedDate);
@@ -36,7 +40,7 @@ export default function YearView({
   };
 
   return (
-    <section className="calendar-card relative flex h-full min-h-0 flex-col rounded-[28px] border border-slate-900/8 bg-white/70 p-5 shadow-[0_24px_70px_rgba(36,52,89,0.12)] backdrop-blur-md">
+    <section className="calendar-card relative flex h-full min-h-0 flex-col rounded-[28px] p-5">
       <CalendarViewHeader
         eyebrow="Year view"
         title={selectedDate.getFullYear()}
@@ -49,7 +53,7 @@ export default function YearView({
         previousLabel="Previous year"
         nextLabel="Next year"
         onAddEvent={() => onCreateEvent?.(selectedDate)}
-        secondaryAction={<TodayScheduleControl events={events} />}
+        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
       <div className="year-grid flex-1 overflow-auto">

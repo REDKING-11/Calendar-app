@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { buildMonthTiles, getWeekdayLabels, isSameDay } from './calendar-helpers';
 
-const SIDEBAR_MONTH_SCROLL_LOCK_MS = 140;
-
 export default function Sidebar({
   availableTags,
   events,
   visibleEvents,
+  preferences,
   timeZone,
   selectedDate,
   onSelectDate,
@@ -23,11 +22,18 @@ export default function Sidebar({
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
   const [isQuickFiltersOpen, setIsQuickFiltersOpen] = useState(true);
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const [isYearPickerOpen, setIsYearPickerOpen] = useState(false);
   const [tagActionMenu, setTagActionMenu] = useState(null);
   const monthPickerRef = useRef(null);
-  const lastMonthScrollAtRef = useRef(0);
-  const tiles = useMemo(() => buildMonthTiles(viewDate, events, timeZone), [viewDate, events, timeZone]);
-  const weekdayLabels = useMemo(() => getWeekdayLabels(timeZone), [timeZone]);
+  const yearPickerRef = useRef(null);
+  const tiles = useMemo(
+    () => buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn),
+    [viewDate, events, timeZone, preferences?.weekStartsOn]
+  );
+  const weekdayLabels = useMemo(
+    () => getWeekdayLabels(timeZone, preferences?.weekStartsOn),
+    [timeZone, preferences?.weekStartsOn]
+  );
   const monthOptions = useMemo(
     () =>
       Array.from({ length: 12 }, (_, index) => {
@@ -41,6 +47,11 @@ export default function Sidebar({
       }),
     [viewDate]
   );
+  const yearOptions = useMemo(() => {
+    const currentYear = viewDate.getFullYear();
+
+    return Array.from({ length: 17 }, (_, index) => currentYear - 8 + index);
+  }, [viewDate]);
   const tagFilters = useMemo(
     () =>
       (availableTags || []).map((tag) => ({
@@ -51,10 +62,10 @@ export default function Sidebar({
       })),
     [availableTags]
   );
-  const monthTitle = viewDate.toLocaleDateString('en-US', {
+  const monthLabel = viewDate.toLocaleDateString('en-US', {
     month: 'long',
-    year: 'numeric',
   });
+  const yearLabel = String(viewDate.getFullYear());
   const quickFilterOptions = [
     { id: 'all', label: 'All' },
     { id: 'today', label: 'Today' },
@@ -69,7 +80,7 @@ export default function Sidebar({
   }, [selectedDate]);
 
   useEffect(() => {
-    if (!isMonthPickerOpen) {
+    if (!isMonthPickerOpen && !isYearPickerOpen) {
       return undefined;
     }
 
@@ -77,11 +88,15 @@ export default function Sidebar({
       if (!monthPickerRef.current?.contains(event.target)) {
         setIsMonthPickerOpen(false);
       }
+      if (!yearPickerRef.current?.contains(event.target)) {
+        setIsYearPickerOpen(false);
+      }
     };
 
     const handleEscape = (event) => {
       if (event.key === 'Escape') {
         setIsMonthPickerOpen(false);
+        setIsYearPickerOpen(false);
       }
     };
 
@@ -92,7 +107,7 @@ export default function Sidebar({
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [isMonthPickerOpen]);
+  }, [isMonthPickerOpen, isYearPickerOpen]);
 
   useEffect(() => {
     if (!tagActionMenu) {
@@ -124,21 +139,30 @@ export default function Sidebar({
     setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
   };
 
+  const changeViewYear = (offset) => {
+    setViewDate((current) => new Date(current.getFullYear() + offset, current.getMonth(), 1));
+  };
+
   const handleMonthWheel = (event) => {
     if (event.deltaY === 0) {
       return;
     }
 
     event.preventDefault();
+    setIsYearPickerOpen(false);
+    setIsMonthPickerOpen(false);
+    changeViewMonth(event.deltaY > 0 ? 1 : -1);
+  };
 
-    const now = Date.now();
-    if (now - lastMonthScrollAtRef.current < SIDEBAR_MONTH_SCROLL_LOCK_MS) {
+  const handleYearWheel = (event) => {
+    if (event.deltaY === 0) {
       return;
     }
 
-    lastMonthScrollAtRef.current = now;
-    changeViewMonth(event.deltaY > 0 ? 1 : -1);
+    event.preventDefault();
     setIsMonthPickerOpen(false);
+    setIsYearPickerOpen(false);
+    changeViewYear(event.deltaY > 0 ? 1 : -1);
   };
 
   const openTagActionMenu = (event, tag) => {
@@ -168,72 +192,143 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sidebar-shell w-full min-h-0 rounded-[28px] border border-slate-200 bg-white px-4 py-5 text-slate-900 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+    <aside className="sidebar-shell app-panel w-full min-h-0 rounded-[28px] px-4 py-5">
       <div className="flex h-full flex-col">
         <button
           type="button"
           onClick={() => onCreateEvent?.(selectedDate || new Date())}
-          className="flex items-center justify-between rounded-2xl bg-slate-800 px-5 py-4 text-left text-white shadow-[0_8px_20px_rgba(15,23,42,0.18)] transition hover:bg-slate-700"
+          className="app-button app-button--primary flex items-center justify-between rounded-2xl px-5 py-4 text-left"
         >
           <span className="flex items-center gap-3">
             <span className="text-3xl leading-none">+</span>
             <span className="text-lg font-semibold">Create</span>
           </span>
-          <span className="text-sm text-slate-300">New</span>
+          <span className="text-sm opacity-80">New</span>
         </button>
 
-        <div className="sidebar-mini-calendar mt-10" onWheel={handleMonthWheel}>
+        <div className="sidebar-mini-calendar mt-10">
           <div className="mb-4 flex items-start justify-between gap-3">
-            <div ref={monthPickerRef} className="sidebar-month-picker-anchor">
-              <button
-                type="button"
-                className="sidebar-month-trigger"
-                onClick={() => setIsMonthPickerOpen((current) => !current)}
-                aria-expanded={isMonthPickerOpen}
-                aria-haspopup="dialog"
-                aria-label={`${monthTitle}. Click to choose a month or use the mouse wheel to move between months.`}
-                title="Click to choose a month or use the mouse wheel to move between months"
-              >
-                <span className="sidebar-month-trigger-label">{monthTitle}</span>
-              </button>
+            <div className="sidebar-period-picker">
+              <div className="sidebar-period-control">
+                <div ref={monthPickerRef} className="sidebar-period-segment sidebar-month-picker-anchor">
+                  <button
+                    type="button"
+                    className="sidebar-month-trigger sidebar-month-trigger--segment"
+                    onClick={() => {
+                      setIsMonthPickerOpen((current) => {
+                        const next = !current;
+                        if (next) {
+                          setIsYearPickerOpen(false);
+                        }
+                        return next;
+                      });
+                    }}
+                    aria-expanded={isMonthPickerOpen}
+                    aria-haspopup="dialog"
+                    aria-label={`Choose month. Current month is ${monthLabel}.`}
+                    title="Choose month"
+                    onWheel={handleMonthWheel}
+                  >
+                    <span className="sidebar-month-trigger-label">{monthLabel}</span>
+                  </button>
 
-              {isMonthPickerOpen ? (
-                <div
-                  className="sidebar-month-picker"
-                  role="dialog"
-                  aria-label={`Choose month for ${viewDate.getFullYear()}`}
-                >
-                  <p className="sidebar-month-picker-year">{viewDate.getFullYear()}</p>
-                  <div className="sidebar-month-picker-grid">
-                    {monthOptions.map((month) => (
-                      <button
-                        key={month.key}
-                        type="button"
-                        className={[
-                          'sidebar-month-option',
-                          month.index === viewDate.getMonth() ? 'sidebar-month-option--active' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        onClick={() => {
-                          setViewDate(
-                            (current) => new Date(current.getFullYear(), month.index, 1)
-                          );
-                          setIsMonthPickerOpen(false);
-                        }}
-                      >
-                        {month.label}
-                      </button>
-                    ))}
-                  </div>
+                  {isMonthPickerOpen ? (
+                    <div
+                      className="sidebar-month-picker sidebar-month-picker--month"
+                      role="dialog"
+                      aria-label={`Choose month for ${viewDate.getFullYear()}`}
+                      onWheel={handleMonthWheel}
+                    >
+                      <p className="sidebar-month-picker-year">{viewDate.getFullYear()}</p>
+                      <div className="sidebar-month-picker-grid">
+                        {monthOptions.map((month) => (
+                          <button
+                            key={month.key}
+                            type="button"
+                            className={[
+                              'sidebar-month-option',
+                              month.index === viewDate.getMonth() ? 'sidebar-month-option--active' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            onClick={() => {
+                              setViewDate(
+                                (current) => new Date(current.getFullYear(), month.index, 1)
+                              );
+                              setIsMonthPickerOpen(false);
+                            }}
+                          >
+                            {month.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+
+                <span className="sidebar-period-divider" aria-hidden="true" />
+
+                <div ref={yearPickerRef} className="sidebar-period-segment sidebar-year-picker-anchor">
+                    <button
+                      type="button"
+                      className="sidebar-month-trigger sidebar-month-trigger--segment sidebar-year-trigger"
+                      onClick={() => {
+                        setIsYearPickerOpen((current) => {
+                          const next = !current;
+                          if (next) {
+                            setIsMonthPickerOpen(false);
+                          }
+                          return next;
+                        });
+                      }}
+                      aria-expanded={isYearPickerOpen}
+                      aria-haspopup="dialog"
+                      aria-label={`Choose year. Current year is ${yearLabel}.`}
+                      title="Choose year"
+                      onWheel={handleYearWheel}
+                    >
+                      <span className="sidebar-month-trigger-label">{yearLabel}</span>
+                    </button>
+
+                    {isYearPickerOpen ? (
+                      <div
+                        className="sidebar-month-picker sidebar-year-picker"
+                        role="dialog"
+                        aria-label={`Choose year around ${viewDate.getFullYear()}`}
+                        onWheel={(event) => event.stopPropagation()}
+                      >
+                        <p className="sidebar-month-picker-year">Select year</p>
+                        <div className="sidebar-year-picker-grid">
+                          {yearOptions.map((year) => (
+                            <button
+                              key={year}
+                              type="button"
+                              className={[
+                                'sidebar-month-option',
+                                'sidebar-year-option',
+                                year === viewDate.getFullYear() ? 'sidebar-month-option--active' : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              onClick={() => {
+                                setViewDate((current) => new Date(year, current.getMonth(), 1));
+                                setIsYearPickerOpen(false);
+                              }}
+                            >
+                              {year}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-4 text-slate-500">
+            <div className="sidebar-period-nav">
               <button
                 type="button"
-                className="text-lg transition hover:text-slate-900"
+                className="sidebar-period-arrow"
                 onClick={() => changeViewMonth(-1)}
                 aria-label="Previous month"
               >
@@ -241,7 +336,7 @@ export default function Sidebar({
               </button>
               <button
                 type="button"
-                className="text-lg transition hover:text-slate-900"
+                className="sidebar-period-arrow"
                 onClick={() => changeViewMonth(1)}
                 aria-label="Next month"
               >
@@ -250,7 +345,7 @@ export default function Sidebar({
             </div>
           </div>
 
-          <div className="grid grid-cols-7 gap-y-3 text-center text-[12px] font-semibold text-slate-500">
+          <div className="grid grid-cols-7 gap-y-3 text-center text-[12px] font-semibold app-text-soft">
             {weekdayLabels.map((day) => (
               <div key={day} className="py-1">
                 {day[0]}
@@ -269,8 +364,8 @@ export default function Sidebar({
                     className={[
                       'sidebar-mini-day mx-auto flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-medium transition',
                       tile.inCurrentMonth
-                        ? 'text-slate-800 hover:bg-slate-100'
-                        : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700',
+                        ? 'text-[var(--text-primary)]'
+                        : 'app-text-soft',
                       tile.isToday ? 'sidebar-mini-day--today' : '',
                       isSelected ? 'sidebar-mini-day--selected' : '',
                     ]
@@ -291,20 +386,20 @@ export default function Sidebar({
             value={searchQuery}
             onChange={(event) => onSearchQueryChange?.(event.target.value)}
             placeholder="Search events or tags"
-            className="w-full rounded-xl bg-slate-100 px-4 py-3 text-[15px] text-slate-700 outline-none transition focus:bg-white focus:ring-2 focus:ring-slate-200"
+            className="app-input w-full rounded-xl px-4 py-3 text-[15px]"
           />
         </div>
 
         <div className="mt-8 space-y-8 text-[15px]">
           <div className="mb-2">
-            <div className="mb-4 flex items-center justify-between font-semibold text-slate-900">
+            <div className="mb-4 flex items-center justify-between font-semibold text-[var(--text-primary)]">
               <button
                 type="button"
                 onClick={() => setIsQuickFiltersOpen((current) => !current)}
-                className="flex items-center gap-2 text-left transition hover:text-slate-700"
+                className="flex items-center gap-2 text-left transition hover:text-[var(--text-secondary)]"
               >
                 <span>Quick filters</span>
-                <span className="text-sm text-slate-500">
+                <span className="text-sm app-text-soft">
                   {isQuickFiltersOpen ? 'Hide' : 'Show'}
                 </span>
               </button>
@@ -313,7 +408,7 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={onClearFilters}
-                  className="text-sm font-medium text-slate-500 transition hover:text-slate-900"
+                  className="text-sm font-medium app-text-soft transition hover:text-[var(--text-primary)]"
                 >
                   Clear
                 </button>
@@ -337,9 +432,7 @@ export default function Sidebar({
                       onClick={() => onQuickFilterChange?.(option.id)}
                       className={[
                         'rounded-full border px-3 py-2 text-sm font-medium transition',
-                        isActive
-                          ? 'border-slate-900 bg-slate-900 text-white'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900',
+                        isActive ? 'app-chip app-chip--active' : 'app-chip',
                       ].join(' ')}
                     >
                       {option.label}
@@ -373,25 +466,25 @@ export default function Sidebar({
                         >
                           {isActive ? 'x' : ''}
                         </span>
-                        <span className="text-[15px] text-slate-800">{item.label}</span>
+                        <span className="text-[15px] text-[var(--text-primary)]">{item.label}</span>
                       </label>
                     );
                   })
                 ) : (
-                  <p className="text-sm text-slate-500">Add tags to events to filter them here.</p>
+                  <p className="text-sm app-text-soft">Add tags to events to filter them here.</p>
                 )}
               </div>
             </div>
           </div>
 
           <div className="min-h-0 flex-1">
-            <div className="mb-4 flex items-center justify-between font-semibold text-slate-900">
+            <div className="mb-4 flex items-center justify-between font-semibold text-[var(--text-primary)]">
               <span>Visible events</span>
-              <span className="text-sm font-medium text-slate-500">{visibleEvents.length}</span>
+              <span className="text-sm font-medium app-text-soft">{visibleEvents.length}</span>
             </div>
 
             {isQuickFiltersOpen ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="sidebar-empty-state rounded-2xl border border-dashed px-4 py-4 text-sm app-text-soft">
                 Visible events are hidden while Quick filters is open.
               </div>
             ) : (
@@ -401,54 +494,55 @@ export default function Sidebar({
                     <button
                       type="button"
                       onClick={() => onSelectDate?.(new Date(event.startsAt))}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:bg-white"
+                      className="sidebar-visible-event-card w-full rounded-xl px-3 py-3 text-left transition"
                     >
                       <div className="flex items-center gap-2">
                         <span
                           className="h-3 w-3 rounded-full"
                           style={{ backgroundColor: event.color || '#4f9d69' }}
                         />
-                        <span className="text-sm font-semibold text-slate-900">{event.title}</span>
+                        <span className="text-sm font-semibold text-[var(--text-primary)]">{event.title}</span>
                       </div>
-                      <p className="mt-2 text-sm text-slate-500">
+                      <p className="mt-2 text-sm app-text-soft">
                         {new Date(event.startsAt).toLocaleDateString('en-US', {
                           month: 'short',
                           day: 'numeric',
                         })}{' '}
                         at{' '}
-                        {new Date(event.startsAt).toLocaleTimeString('en-US', {
+                        {new Intl.DateTimeFormat(undefined, {
                           hour: 'numeric',
                           minute: '2-digit',
-                        })}
+                          hour12: preferences?.timeFormat === '12h',
+                        }).format(new Date(event.startsAt))}
                       </p>
                     </button>
                   </div>
                 ))}
                 {visibleEvents.length === 0 ? (
-                  <p className="text-sm text-slate-500">No events match the current filters.</p>
+                  <p className="text-sm app-text-soft">No events match the current filters.</p>
                 ) : null}
               </div>
             )}
           </div>
         </div>
 
-        <div className="mt-auto pt-10 text-sm text-slate-400">Terms - Privacy</div>
+        <div className="mt-auto pt-10 text-sm app-text-soft">Terms - Privacy</div>
       </div>
       {tagActionMenu ? (
         <div
-          className="fixed z-50 min-w-[180px] rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_rgba(15,23,42,0.18)]"
+          className="sidebar-context-menu fixed z-50 min-w-[180px] rounded-2xl p-2"
           style={{
             left: Math.min(tagActionMenu.x, window.innerWidth - 196),
             top: Math.min(tagActionMenu.y, window.innerHeight - 120),
           }}
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <p className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+          <p className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.14em] app-text-soft">
             {tagActionMenu.tag.label}
           </p>
           <button
             type="button"
-            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+            className="sidebar-context-button flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
             onClick={() => {
               onManageTag?.(tagActionMenu.tag, 'rename');
               setTagActionMenu(null);
@@ -458,7 +552,7 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 transition hover:bg-red-50"
+            className="sidebar-context-button sidebar-context-button--danger flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
             onClick={() => {
               onManageTag?.(tagActionMenu.tag, 'delete');
               setTagActionMenu(null);
@@ -468,12 +562,12 @@ export default function Sidebar({
           </button>
           <div
             role="alert"
-            className="mx-1 mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5"
+            className="sidebar-warning-card mx-1 mt-2 rounded-xl px-3 py-2.5"
           >
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em]">
               Warning
             </p>
-            <p className="mt-1 text-xs leading-5 text-red-700">
+            <p className="mt-1 text-xs leading-5">
               Deleting this tag removes it from every event across the app.
             </p>
           </div>

@@ -37,19 +37,19 @@ export default function EventComposerDrawer({
 
   return (
     <aside className={`event-drawer ${isOpen ? 'event-drawer--open' : ''}`} aria-hidden={!isOpen}>
-      <section className="flex h-full flex-col rounded-r-[28px] border-r border-slate-900/8 bg-white/88 p-5 shadow-[0_24px_70px_rgba(36,52,89,0.18)] backdrop-blur-xl">
+      <section className="app-drawer-panel flex h-full flex-col rounded-r-[28px] p-5">
         <div className="event-composer-top flex items-start justify-between gap-4">
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+            <p className="settings-section-eyebrow">
               {mode === 'edit' ? 'Edit event' : 'New event'}
             </p>
-            <h2 className="m-0 text-[2rem] font-semibold tracking-tight text-slate-900">
+            <h2 className="m-0 text-[2rem] font-semibold tracking-tight text-[var(--text-primary)]">
               {mode === 'edit' ? 'Update event details' : 'Create local event'}
             </h2>
           </div>
           <button
             type="button"
-            className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
+            className="app-button app-button--secondary"
             onClick={onClose}
           >
             Close
@@ -74,7 +74,7 @@ export default function EventComposerDrawer({
             </div>
 
             <div className="event-composer-field">
-              <label htmlFor="event-title" className="text-sm font-medium text-slate-700">
+              <label htmlFor="event-title" className="text-sm font-medium app-text-muted">
                 Title
               </label>
               <input
@@ -84,12 +84,12 @@ export default function EventComposerDrawer({
                 value={draftEvent.title}
                 onChange={onDraftChange}
                 placeholder="Pairing flow review"
-                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="app-input w-full rounded-xl px-4 py-3"
               />
             </div>
 
             <div className="event-composer-field">
-              <label htmlFor="event-description" className="text-sm font-medium text-slate-700">
+              <label htmlFor="event-description" className="text-sm font-medium app-text-muted">
                 Description
               </label>
               <textarea
@@ -99,13 +99,13 @@ export default function EventComposerDrawer({
                 onChange={onDraftChange}
                 placeholder={descriptionPlaceholder}
                 rows={3}
-                className="w-full resize-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="app-input w-full resize-none rounded-xl px-4 py-3"
               />
             </div>
 
             <div className="event-composer-grid">
               <div className="event-composer-field">
-                <label htmlFor="event-date" className="text-sm font-medium text-slate-700">
+                <label htmlFor="event-date" className="text-sm font-medium app-text-muted">
                   Date
                 </label>
                 <input
@@ -114,12 +114,12 @@ export default function EventComposerDrawer({
                   type="date"
                   value={draftEvent.date}
                   onChange={onDraftChange}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  className="app-input w-full rounded-xl px-4 py-3"
                 />
               </div>
 
               <div className="event-composer-field">
-                <label htmlFor="event-time" className="text-sm font-medium text-slate-700">
+                <label htmlFor="event-time" className="text-sm font-medium app-text-muted">
                   {timeLabel}
                 </label>
                 <input
@@ -128,13 +128,13 @@ export default function EventComposerDrawer({
                   type="time"
                   value={draftEvent.time}
                   onChange={onDraftChange}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  className="app-input w-full rounded-xl px-4 py-3"
                 />
               </div>
 
               {!isTask ? (
                 <div className="event-composer-field">
-                  <label htmlFor="event-end-time" className="text-sm font-medium text-slate-700">
+                  <label htmlFor="event-end-time" className="text-sm font-medium app-text-muted">
                     End time
                   </label>
                   <input
@@ -143,7 +143,7 @@ export default function EventComposerDrawer({
                     type="time"
                     value={draftEvent.endTime}
                     onChange={onDraftChange}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="app-input w-full rounded-xl px-4 py-3"
                   />
                 </div>
               ) : null}
@@ -153,7 +153,7 @@ export default function EventComposerDrawer({
               <>
                 <div className="event-composer-grid">
                   <div className="event-composer-field">
-                    <label htmlFor="task-repeat" className="text-sm font-medium text-slate-700">
+                    <label htmlFor="task-repeat" className="text-sm font-medium app-text-muted">
                       Repeat
                     </label>
                     <select
@@ -161,7 +161,7 @@ export default function EventComposerDrawer({
                       name="repeat"
                       value={draftEvent.repeat}
                       onChange={onDraftChange}
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      className="app-input w-full rounded-xl px-4 py-3"
                     >
                       {TASK_REPEAT_OPTIONS.map((option) => (
                         <option key={option.id} value={option.id}>
@@ -171,7 +171,7 @@ export default function EventComposerDrawer({
                     </select>
                   </div>
 
-                  <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+                  <label className="app-checkbox-row text-sm font-medium">
                     <input
                       name="hasDeadline"
                       type="checkbox"
@@ -190,7 +190,7 @@ export default function EventComposerDrawer({
                 </div>
 
                 <div className="event-composer-field">
-                  <label htmlFor="task-group" className="text-sm font-medium text-slate-700">
+                  <label htmlFor="task-group" className="text-sm font-medium app-text-muted">
                     Group
                   </label>
                   <input
@@ -200,12 +200,12 @@ export default function EventComposerDrawer({
                     value={draftEvent.groupName}
                     onChange={onDraftChange}
                     placeholder="Optional group, e.g. Home, Work, Launch prep"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="app-input w-full rounded-xl px-4 py-3"
                   />
                 </div>
 
                 {mode === 'edit' ? (
-                  <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+                  <label className="app-checkbox-row text-sm font-medium">
                     <input
                       name="completed"
                       type="checkbox"
@@ -228,7 +228,7 @@ export default function EventComposerDrawer({
             {!isTask ? (
               <>
                 <div className="event-composer-field">
-                  <label htmlFor="event-color" className="text-sm font-medium text-slate-700">
+                  <label htmlFor="event-color" className="text-sm font-medium app-text-muted">
                     Color
                   </label>
                   <div className="event-color-picker-row event-color-picker-row--compact">
@@ -254,14 +254,14 @@ export default function EventComposerDrawer({
                       onChange={onDraftChange}
                       className="event-color-picker-input"
                     />
-                    <span className="text-sm font-medium text-slate-600">{draftEvent.color}</span>
+                    <span className="text-sm font-medium app-text-muted">{draftEvent.color}</span>
                   </div>
                 </div>
 
                 <div className="event-tag-builder">
                   {reusableTags.length > 0 ? (
                     <div className="event-tag-builder-suggestions">
-                      <p className="m-0 text-sm font-medium text-slate-700">Your Made Tags</p>
+                      <p className="m-0 text-sm font-medium app-text-muted">Your Made Tags</p>
                       <div className="event-tag-list">
                         {reusableTags.map((tag) => (
                           <button
@@ -289,7 +289,7 @@ export default function EventComposerDrawer({
                     value={draftTag.label}
                     onChange={onDraftTagChange}
                     placeholder="Add a tag like Design"
-                    className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="app-input rounded-xl px-4 py-3"
                   />
                   <div className="event-color-row">
                     {TAG_COLOR_PRESETS.map((color) => (
@@ -316,7 +316,7 @@ export default function EventComposerDrawer({
                     <button
                       type="button"
                       onClick={onAddTag}
-                      className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
+                      className="app-button app-button--secondary"
                     >
                       Add tag
                     </button>
@@ -331,13 +331,13 @@ export default function EventComposerDrawer({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-full border border-slate-900/12 bg-white/85 px-4 py-2.5 text-slate-800 transition hover:bg-white"
+                className="app-button app-button--secondary"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-full bg-slate-900 px-4 py-2.5 text-white transition hover:bg-slate-800"
+                className="app-button app-button--primary"
               >
                 {mode === 'edit' ? 'Save changes' : 'Save event'}
               </button>

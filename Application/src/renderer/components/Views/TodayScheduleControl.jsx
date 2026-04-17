@@ -1,14 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { isEventOnDate } from '../calendar-helpers';
+import { formatTime } from '../../formatting';
 
-function formatTime(dateString) {
-  return new Date(dateString).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-export default function TodayScheduleControl({ events }) {
+export default function TodayScheduleControl({ events, preferences }) {
   const [isOpen, setIsOpen] = useState(false);
   const userName =
     typeof window !== 'undefined'
@@ -41,13 +35,13 @@ export default function TodayScheduleControl({ events }) {
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <p className="eyebrow">Daily plan</p>
-              <h3 className="m-0 text-2xl font-semibold text-slate-900">
+              <h3 className="m-0 text-2xl font-semibold text-[var(--text-primary)]">
                 Hey {userName || 'there'}, today&apos;s schedule
               </h3>
             </div>
             <button
               type="button"
-              className="rounded-full border border-slate-900/12 bg-white/85 px-3 py-2 text-sm text-slate-700 transition hover:bg-white"
+              className="app-button app-button--secondary"
               onClick={() => setIsOpen(false)}
             >
               Close
@@ -56,39 +50,39 @@ export default function TodayScheduleControl({ events }) {
 
           {todayEvents.length > 0 ? (
             <div className="grid gap-3">
-              <div className="rounded-2xl border border-slate-900/6 bg-white/85 px-4 py-3">
-                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <div className="today-schedule-card rounded-2xl px-4 py-3">
+                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] app-text-soft">
                   You start at
                 </p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {formatTime(firstEvent.startsAt)} {firstEvent.title}
+                <p className="mt-2 text-lg font-semibold text-[var(--text-primary)]">
+                  {formatTime(firstEvent.startsAt, preferences)} {firstEvent.title}
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-slate-900/6 bg-white/85 px-4 py-3">
-                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <div className="today-schedule-card rounded-2xl px-4 py-3">
+                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] app-text-soft">
                   Your day ends at
                 </p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {formatTime(lastEvent.endsAt)} {lastEvent.title}
+                <p className="mt-2 text-lg font-semibold text-[var(--text-primary)]">
+                  {formatTime(lastEvent.endsAt, preferences)} {lastEvent.title}
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-slate-900/6 bg-white/85 px-4 py-3">
-                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <div className="today-schedule-card rounded-2xl px-4 py-3">
+                <p className="m-0 text-sm font-semibold uppercase tracking-[0.12em] app-text-soft">
                   Everything today
                 </p>
                 <div className="mt-3 grid gap-2">
                   {todayEvents.map((event) => (
                     <div
                       key={event.id}
-                      className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2"
+                      className="today-schedule-event flex items-center justify-between gap-3 rounded-xl px-3 py-2"
                     >
-                      <span className="text-sm font-semibold text-slate-700">
-                        {formatTime(event.startsAt)}
+                      <span className="text-sm font-semibold app-text-muted">
+                        {formatTime(event.startsAt, preferences)}
                       </span>
                       <div className="flex-1">
-                        <span className="text-sm text-slate-900">{event.title}</span>
+                        <span className="text-sm text-[var(--text-primary)]">{event.title}</span>
                         {event.tags?.length ? (
                           <div className="event-inline-tag-list mt-2">
                             {event.tags.map((tag) => (
@@ -113,7 +107,7 @@ export default function TodayScheduleControl({ events }) {
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-slate-900/6 bg-white/85 px-4 py-3 text-slate-600">
+            <div className="today-schedule-card rounded-2xl px-4 py-3 app-text-muted">
               Hey {userName || 'there'}, nothing is scheduled for today yet.
             </div>
           )}

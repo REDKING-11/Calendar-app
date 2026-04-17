@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { buildMonthTiles, getWeekdayLabels } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
+import { formatMonthYear } from '../../formatting';
 
 function formatEventPreview(event) {
   const firstTag = event.tags?.[0]?.label;
@@ -20,6 +21,7 @@ function formatEventPreview(event) {
 
 export default function MonthView({
   events,
+  preferences,
   timeZone,
   onCreateEvent,
   selectedDate,
@@ -29,12 +31,9 @@ export default function MonthView({
   onChangeView,
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
-  const tiles = buildMonthTiles(viewDate, events, timeZone);
-  const weekdayLabels = getWeekdayLabels(timeZone);
-  const monthTitle = viewDate.toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric',
-  });
+  const tiles = buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn);
+  const weekdayLabels = getWeekdayLabels(timeZone, preferences?.weekStartsOn);
+  const monthTitle = formatMonthYear(viewDate);
 
   const goToPreviousMonth = () => {
     setViewDate((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1));
@@ -60,7 +59,7 @@ export default function MonthView({
   };
 
   return (
-    <section className="calendar-card relative flex h-full min-h-0 flex-col rounded-[28px] border border-slate-900/8 bg-white/70 p-5 shadow-[0_24px_70px_rgba(36,52,89,0.12)] backdrop-blur-md">
+    <section className="calendar-card relative flex h-full min-h-0 flex-col rounded-[28px] p-5">
       <CalendarViewHeader
         eyebrow="Month view"
         title={monthTitle}
@@ -73,7 +72,7 @@ export default function MonthView({
         previousLabel="Previous month"
         nextLabel="Next month"
         onAddEvent={() => onCreateEvent?.(selectedDate || viewDate)}
-        secondaryAction={<TodayScheduleControl events={events} />}
+        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
       <div className="calendar-weekdays" aria-hidden="true">

@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { isEventOnDate } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
+import { formatTime } from '../../formatting';
 
 const ZOOM_LEVELS = [
   {
@@ -39,13 +40,6 @@ const DEFAULT_ZOOM_STATE = {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
-}
-
-function formatTime(dateString) {
-  return new Date(dateString).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }
 
 function formatMinutesLabel(totalMinutes) {
@@ -158,6 +152,7 @@ function getVisibleEventLayout(event, windowState, pixelsPerHour) {
 
 export default function DayView({
   events,
+  preferences,
   selectedDate,
   onCreateEvent,
   onSelectEvent,
@@ -285,7 +280,7 @@ export default function DayView({
         previousLabel="Previous day"
         nextLabel="Next day"
         onAddEvent={() => onCreateEvent?.(selectedDate)}
-        secondaryAction={<TodayScheduleControl events={events} />}
+        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
       <div
@@ -350,7 +345,7 @@ export default function DayView({
                       : formatTypeLabel(event.type)}
                   </p>
                   <p className="week-event-time">
-                    {formatTime(event.startsAt)} - {formatTime(event.endsAt)}
+                    {formatTime(event.startsAt, preferences)} - {formatTime(event.endsAt, preferences)}
                   </p>
                   {event.tags?.length ? (
                     <div className="event-inline-tag-list">

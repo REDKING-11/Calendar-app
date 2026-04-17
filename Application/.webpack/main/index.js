@@ -77636,6 +77636,7 @@ const {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   safeStorage,
   shell
 } = __webpack_require__(/*! electron */ "electron");
@@ -77645,26 +77646,55 @@ const {
 const {
   registerCalendarHandlers
 } = __webpack_require__(/*! ./ipc/calendar-ipc */ "./src/ipc/calendar-ipc.js");
-const createWindow = () => {
+let mainWindow = null;
+let settingsWindow = null;
+function withWindowMode(url, mode) {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}window=${mode}`;
+}
+const createWindow = (mode = 'main') => {
   const preloadPath = path.join(__dirname, '..', 'renderer', 'main_window', 'preload.js');
-  const mainWindow = new BrowserWindow({
+  const windowOptions = mode === 'settings' ? {
+    width: 980,
+    height: 900,
+    minWidth: 860,
+    minHeight: 720,
+    title: 'Calendar Settings',
+    backgroundColor: '#e8f3ff'
+  } : {
     width: 1280,
     height: 780,
     minWidth: 1278,
     minHeight: 638,
-    backgroundColor: '#f4efe7',
+    title: 'Calendar App',
+    backgroundColor: '#e8f3ff'
+  };
+  const window = new BrowserWindow({
+    ...windowOptions,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false
     }
   });
-  mainWindow.loadURL('http://localhost:3001/main_window/index.html');
+  window.loadURL(withWindowMode('http://localhost:3001/main_window/index.html', mode));
   if (!app.isPackaged) {
-    mainWindow.webContents.openDevTools({
+    window.webContents.openDevTools({
       mode: 'detach'
     });
   }
+  if (mode === 'settings') {
+    settingsWindow = window;
+    settingsWindow.on('closed', () => {
+      settingsWindow = null;
+    });
+  } else {
+    mainWindow = window;
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+    });
+  }
+  return window;
 };
 app.whenReady().then(() => {
   const store = new CalendarStore(app.getPath('userData'), {
@@ -77674,6 +77704,30 @@ app.whenReady().then(() => {
   });
   registerCalendarHandlers(store);
   createWindow();
+  ipcMain.removeHandler('app:openSettingsWindow');
+  ipcMain.removeHandler('app:closeCurrentWindow');
+  ipcMain.handle('app:openSettingsWindow', () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.show();
+      settingsWindow.focus();
+      return {
+        opened: true,
+        reused: true
+      };
+    }
+    createWindow('settings');
+    return {
+      opened: true,
+      reused: false
+    };
+  });
+  ipcMain.handle('app:closeCurrentWindow', event => {
+    const currentWindow = BrowserWindow.fromWebContents(event.sender);
+    currentWindow?.close();
+    return {
+      closed: true
+    };
+  });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();

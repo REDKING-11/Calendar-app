@@ -30,13 +30,13 @@ function EnvField({ field, value, onChange }) {
 
   return (
     <label className="flex flex-col gap-2">
-      <span className="text-sm font-medium text-slate-700">{field.label}</span>
+      <span className="text-sm font-medium app-text-muted">{field.label}</span>
       <input
         type={isSecret ? 'password' : 'text'}
         value={value}
         onChange={(event) => onChange(field.key, event.target.value)}
         placeholder={field.defaultValue}
-        className="rounded-2xl border border-slate-900/12 bg-white px-4 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-slate-900/25"
+        className="app-input rounded-2xl px-4 py-3 text-sm"
       />
     </label>
   );
@@ -102,92 +102,92 @@ export default function HostedSyncPanel({
   };
 
   return (
-    <section className="mt-6 rounded-[28px] border border-slate-900/8 bg-white/78 p-6 shadow-[0_20px_60px_rgba(36,52,89,0.12)] backdrop-blur-md">
+    <section className="settings-card settings-card--full">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+          <p className="settings-section-eyebrow">
             Optional hosted backend
           </p>
-          <h3 className="m-0 text-2xl font-semibold tracking-tight text-slate-900">
+          <h3 className="settings-card-title">
             Self-hosted sync with SelfHdb
           </h3>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+          <p className="mt-3 max-w-2xl text-sm leading-6 app-text-muted">
             The desktop app stays local-first. Hosted mode only adds account sign-in and sync
             against your own PHP backend.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <span className="rounded-full border border-slate-900/10 bg-white/90 px-3 py-2 text-sm text-slate-700">
+          <span className="app-pill">
             Status: {hosted?.connectionStatus || 'disconnected'}
           </span>
-          <span className="rounded-full border border-slate-900/10 bg-white/90 px-3 py-2 text-sm text-slate-700">
+          <span className="app-pill">
             Cursor: {hosted?.serverCursor || 0}
           </span>
         </div>
       </div>
 
       <div className="mt-5 grid gap-3 xl:grid-cols-2">
-        <div className="rounded-[24px] border border-slate-900/8 bg-slate-50/80 p-5">
-          <h4 className="m-0 text-lg font-semibold text-slate-900">Connect this app</h4>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
+        <div className="settings-subcard">
+          <h4 className="m-0 text-lg font-semibold text-[var(--text-primary)]">Connect this app</h4>
+          <p className="mt-2 text-sm leading-6 app-text-muted">
             These fields are only for the app to reach your hosted API. The app never connects
             directly to MySQL.
           </p>
 
           <div className="mt-4 grid gap-3">
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Backend URL</span>
+              <span className="text-sm font-medium app-text-muted">Backend URL</span>
               <input
                 type="url"
                 value={hostedUrl}
                 onChange={(event) => onHostedUrlChange(event.target.value)}
                 placeholder="https://calendar.example.com/selfhdb"
-                className="rounded-2xl border border-slate-900/12 bg-white px-4 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-slate-900/25"
+                className="app-input rounded-2xl px-4 py-3 text-sm"
               />
-              <span className="text-xs leading-5 text-slate-500">
+              <span className="text-xs leading-5 app-text-soft">
                 Use the public URL where SelfHdb responds to <code>/v1/health</code>.
               </span>
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Email</span>
+              <span className="text-sm font-medium app-text-muted">Email</span>
               <input
                 type="email"
                 value={hostedEmail}
                 onChange={(event) => onHostedEmailChange(event.target.value)}
                 placeholder="you@example.com"
-                className="rounded-2xl border border-slate-900/12 bg-white px-4 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-slate-900/25"
+                className="app-input rounded-2xl px-4 py-3 text-sm"
               />
-              <span className="text-xs leading-5 text-slate-500">
+              <span className="text-xs leading-5 app-text-soft">
                 This is the account you create or use on your SelfHdb server.
               </span>
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Password</span>
+              <span className="text-sm font-medium app-text-muted">Password</span>
               <input
                 type="password"
                 value={hostedPassword}
                 onChange={(event) => onHostedPasswordChange(event.target.value)}
                 placeholder="Enter your SelfHdb password"
-                className="rounded-2xl border border-slate-900/12 bg-white px-4 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-slate-900/25"
+                className="app-input rounded-2xl px-4 py-3 text-sm"
               />
-              <span className="text-xs leading-5 text-slate-500">
+              <span className="text-xs leading-5 app-text-soft">
                 Stored only for the sign-in action. Session tokens stay local after login.
               </span>
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Device name</span>
+              <span className="text-sm font-medium app-text-muted">Device name</span>
               <input
                 type="text"
                 value={hostedDeviceName}
                 onChange={(event) => onHostedDeviceNameChange(event.target.value)}
                 placeholder="Optional: Work laptop"
-                className="rounded-2xl border border-slate-900/12 bg-white px-4 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-slate-900/25"
+                className="app-input rounded-2xl px-4 py-3 text-sm"
               />
-              <span className="text-xs leading-5 text-slate-500">
+              <span className="text-xs leading-5 app-text-soft">
                 Helpful when you later review trusted devices on the backend.
               </span>
             </label>
@@ -198,7 +198,7 @@ export default function HostedSyncPanel({
               type="button"
               onClick={onTestConnection}
               disabled={!canTestConnection}
-              className="rounded-full border border-slate-900/12 bg-white px-4 py-3 text-sm font-medium text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--secondary"
             >
               {busyAction === 'test-connection' ? 'Checking...' : 'Test connection'}
             </button>
@@ -206,7 +206,7 @@ export default function HostedSyncPanel({
               type="button"
               onClick={onRegister}
               disabled={!canAttemptAuth}
-              className="rounded-full border border-slate-900/12 bg-white px-4 py-3 text-sm font-medium text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--secondary"
             >
               {busyAction === 'register' ? 'Creating...' : 'Register'}
             </button>
@@ -214,7 +214,7 @@ export default function HostedSyncPanel({
               type="button"
               onClick={onSignIn}
               disabled={!canAttemptAuth}
-              className="rounded-full border border-slate-900/12 bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--primary"
             >
               {busyAction === 'login' ? 'Signing in...' : 'Sign in'}
             </button>
@@ -222,7 +222,7 @@ export default function HostedSyncPanel({
               type="button"
               onClick={onSyncNow}
               disabled={!isConnected || Boolean(busyAction)}
-              className="rounded-full border border-slate-900/12 bg-white px-4 py-3 text-sm font-medium text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--secondary"
             >
               {busyAction === 'sync' ? 'Syncing...' : 'Sync now'}
             </button>
@@ -230,18 +230,18 @@ export default function HostedSyncPanel({
               type="button"
               onClick={onDisconnect}
               disabled={(!hosted?.enabled && !isConnected) || Boolean(busyAction)}
-              className="rounded-full border border-slate-900/12 bg-white px-4 py-3 text-sm font-medium text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--secondary"
             >
               {busyAction === 'disconnect' ? 'Disconnecting...' : 'Disconnect'}
             </button>
           </div>
         </div>
 
-        <div className="rounded-[24px] border border-slate-900/8 bg-slate-50/80 p-5">
+        <div className="settings-subcard">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h4 className="m-0 text-lg font-semibold text-slate-900">SelfHdb .env maker</h4>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
+              <h4 className="m-0 text-lg font-semibold text-[var(--text-primary)]">SelfHdb .env maker</h4>
+              <p className="mt-2 text-sm leading-6 app-text-muted">
                 This builds the server-side environment file for your PHP host. It is not used by
                 the client at runtime.
               </p>
@@ -250,7 +250,7 @@ export default function HostedSyncPanel({
               type="button"
               onClick={() => onExportEnv(envValues)}
               disabled={!canExportEnv}
-              className="rounded-full border border-slate-900/12 bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="app-button app-button--primary"
             >
               {busyAction === 'export-env' ? 'Exporting...' : 'Export .env'}
             </button>
@@ -274,44 +274,44 @@ export default function HostedSyncPanel({
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-900/8 bg-slate-50/80 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        <div className="settings-subcard settings-subcard--compact">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] app-text-soft">
             Active URL
           </p>
-          <p className="mt-2 break-all text-sm text-slate-700">
+          <p className="mt-2 break-all text-sm text-[var(--text-primary)]">
             {hosted?.baseUrl || 'Not configured'}
           </p>
         </div>
-        <div className="rounded-2xl border border-slate-900/8 bg-slate-50/80 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        <div className="settings-subcard settings-subcard--compact">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] app-text-soft">
             Signed in as
           </p>
-          <p className="mt-2 text-sm text-slate-700">
+          <p className="mt-2 text-sm text-[var(--text-primary)]">
             {hosted?.accountEmail || 'Not signed in'}
           </p>
         </div>
-        <div className="rounded-2xl border border-slate-900/8 bg-slate-50/80 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        <div className="settings-subcard settings-subcard--compact">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] app-text-soft">
             Last sync
           </p>
-          <p className="mt-2 text-sm text-slate-700">{formatDateTime(hosted?.lastSyncedAt)}</p>
+          <p className="mt-2 text-sm text-[var(--text-primary)]">{formatDateTime(hosted?.lastSyncedAt)}</p>
         </div>
-        <div className="rounded-2xl border border-slate-900/8 bg-slate-50/80 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        <div className="settings-subcard settings-subcard--compact">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] app-text-soft">
             Auth mode
           </p>
-          <p className="mt-2 text-sm text-slate-700">
+          <p className="mt-2 text-sm text-[var(--text-primary)]">
             {hosted?.authMode || hosted?.enabledProviders?.join(', ') || 'Not detected yet'}
           </p>
         </div>
       </div>
 
-      <div className="mt-5 rounded-[24px] border border-slate-900/8 bg-slate-50/80 p-5">
-        <h4 className="m-0 text-lg font-semibold text-slate-900">Quick setup tutorial</h4>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
+      <div className="settings-subcard mt-5">
+        <h4 className="m-0 text-lg font-semibold text-[var(--text-primary)]">Quick setup tutorial</h4>
+        <p className="mt-2 text-sm leading-6 app-text-muted">
           Built for normal PHP hosting and cPanel. These steps are enough for a first deployment.
         </p>
-        <ol className="mt-4 ml-5 grid gap-2 text-sm leading-6 text-slate-700">
+        <ol className="mt-4 ml-5 grid gap-2 text-sm leading-6 text-[var(--text-primary)]">
           {tutorialSteps.map((step) => (
             <li key={step}>{step}</li>
           ))}
@@ -319,18 +319,18 @@ export default function HostedSyncPanel({
       </div>
 
       {statusMessage ? (
-        <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="settings-feedback settings-feedback--warning">
           {statusMessage}
         </p>
       ) : null}
 
       {hosted?.lastError ? (
-        <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+        <p className="settings-feedback settings-feedback--danger">
           {hosted.lastError}
         </p>
       ) : null}
 
-      <p className="mt-4 text-xs leading-6 text-slate-500">
+      <p className="mt-4 text-xs leading-6 app-text-soft">
         HTTPS is expected for real deployments. Plain HTTP should only be used for localhost
         testing while you bring the backend up.
       </p>

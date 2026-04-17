@@ -1,8 +1,26 @@
 const { contextBridge } = require('electron');
 const { ipcRenderer } = require('electron');
 
+async function openSettingsWindow() {
+  try {
+    return await ipcRenderer.invoke('app:openSettingsWindow');
+  } catch (error) {
+    if (String(error?.message || '').includes("No handler registered for 'app:openSettingsWindow'")) {
+      return {
+        opened: false,
+        reused: false,
+        fallbackRequired: true,
+      };
+    }
+
+    throw error;
+  }
+}
+
 contextBridge.exposeInMainWorld('calendarApp', {
   platform: process.platform,
+  openSettingsWindow,
+  closeCurrentWindow: () => ipcRenderer.invoke('app:closeCurrentWindow'),
   getSnapshot: () => ipcRenderer.invoke('calendar:getSnapshot'),
   createEvent: (input) => ipcRenderer.invoke('calendar:createEvent', input),
   updateEvent: (input) => ipcRenderer.invoke('calendar:updateEvent', input),
