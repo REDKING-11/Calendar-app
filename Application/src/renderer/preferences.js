@@ -5,6 +5,7 @@ export const STORAGE_KEYS = {
   userName: 'calendar-user-name',
   userCountry: 'calendar-user-country',
   userTimeZone: 'calendar-user-timezone',
+  notificationEmail: 'calendar-notification-email',
   hostedEmail: 'calendar-hosted-email',
   hostedDeviceName: 'calendar-hosted-device-name',
   themeMode: 'calendar-theme-mode',
@@ -14,6 +15,9 @@ export const STORAGE_KEYS = {
   showCompletedTasks: 'calendar-settings-show-completed-tasks',
   defaultEventDuration: 'calendar-settings-default-event-duration',
   defaultTaskDuration: 'calendar-settings-default-task-duration',
+  defaultQuickType: 'calendar-settings-default-quick-type',
+  defaultQuickSendFrom: 'calendar-settings-default-quick-send-from',
+  defaultQuickDuration: 'calendar-settings-default-quick-duration',
 };
 
 export const DEFAULT_PREFERENCES = {
@@ -27,6 +31,10 @@ export const DEFAULT_PREFERENCES = {
   showCompletedTasks: true,
   defaultEventDuration: 60,
   defaultTaskDuration: 30,
+  defaultQuickType: 'meeting',
+  defaultQuickSendFrom: 'internal',
+  defaultQuickDuration: 60,
+  notificationEmail: '',
   hostedEmail: '',
   hostedDeviceName: '',
 };
@@ -61,6 +69,17 @@ export function getStoredPreferences() {
     defaultTaskDuration: Number(
       storage?.getItem(STORAGE_KEYS.defaultTaskDuration) || DEFAULT_PREFERENCES.defaultTaskDuration
     ),
+    defaultQuickType:
+      storage?.getItem(STORAGE_KEYS.defaultQuickType) || DEFAULT_PREFERENCES.defaultQuickType,
+    defaultQuickSendFrom:
+      storage?.getItem(STORAGE_KEYS.defaultQuickSendFrom) ||
+      DEFAULT_PREFERENCES.defaultQuickSendFrom,
+    defaultQuickDuration: Number(
+      storage?.getItem(STORAGE_KEYS.defaultQuickDuration) ||
+        DEFAULT_PREFERENCES.defaultQuickDuration
+    ),
+    notificationEmail:
+      storage?.getItem(STORAGE_KEYS.notificationEmail) || DEFAULT_PREFERENCES.notificationEmail,
     hostedEmail: storage?.getItem(STORAGE_KEYS.hostedEmail) || DEFAULT_PREFERENCES.hostedEmail,
     hostedDeviceName:
       storage?.getItem(STORAGE_KEYS.hostedDeviceName) || DEFAULT_PREFERENCES.hostedDeviceName,
@@ -89,6 +108,19 @@ export function persistPreferences(preferences) {
     STORAGE_KEYS.defaultTaskDuration,
     String(preferences.defaultTaskDuration || DEFAULT_PREFERENCES.defaultTaskDuration)
   );
+  storage.setItem(
+    STORAGE_KEYS.defaultQuickType,
+    preferences.defaultQuickType || DEFAULT_PREFERENCES.defaultQuickType
+  );
+  storage.setItem(
+    STORAGE_KEYS.defaultQuickSendFrom,
+    preferences.defaultQuickSendFrom || DEFAULT_PREFERENCES.defaultQuickSendFrom
+  );
+  storage.setItem(
+    STORAGE_KEYS.defaultQuickDuration,
+    String(preferences.defaultQuickDuration || DEFAULT_PREFERENCES.defaultQuickDuration)
+  );
+  storage.setItem(STORAGE_KEYS.notificationEmail, preferences.notificationEmail || '');
   storage.setItem(STORAGE_KEYS.hostedEmail, preferences.hostedEmail || '');
   storage.setItem(STORAGE_KEYS.hostedDeviceName, preferences.hostedDeviceName || '');
   storage.setItem(STORAGE_KEYS.setupComplete, 'true');

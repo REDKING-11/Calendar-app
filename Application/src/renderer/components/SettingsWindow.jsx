@@ -205,6 +205,18 @@ export default function SettingsWindow({
               />
             </label>
             <label className="settings-field">
+              <span>Notification email</span>
+              <input
+                type="email"
+                className="app-input"
+                value={preferences.notificationEmail}
+                placeholder="Optional"
+                onChange={(event) =>
+                  updatePreference(setPreferences, { notificationEmail: event.target.value })
+                }
+              />
+            </label>
+            <label className="settings-field">
               <span>Country</span>
               <select
                 className="app-input"

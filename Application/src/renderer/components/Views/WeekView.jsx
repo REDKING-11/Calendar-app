@@ -1,29 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { buildWeekDays, startOfWeek } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
-import { formatTime } from '../../formatting';
+import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
+import { createClickIntentRouter } from '../../clickIntent';
 
 const HOUR_HEIGHT = 64;
 const HOURS = Array.from({ length: 24 }, (_, index) => index);
 const HOUR_LABELS = Array.from({ length: 25 }, (_, index) =>
   `${String(index).padStart(2, '0')}:00`
 );
-function formatTypeLabel(type) {
-  if (!type) {
-    return 'Event';
-  }
-
-  return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
-}
-
-function formatEventHeading(event) {
-  if (event.type === 'task') {
-    return event.completed ? `${event.title} (done)` : event.title;
-  }
-
-  return event.title;
-}
 
 function formatWeekTitle(startDate, endDate) {
   const startMonth = startDate.toLocaleDateString('en-US', { month: 'short' });
@@ -48,7 +34,15 @@ function getEventLayout(event) {
 
   return {
     top: (startMinutes / 60) * HOUR_HEIGHT,
-    height: Math.max((durationMinutes / 60) * HOUR_HEIGHT, 28),
+    height: Math.max((durationMinutes / 60) * HOUR_HEIGHT, 32),
+  };
+}
+
+function getAnchorFromElement(element) {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.bottom,
   };
 }
 
@@ -63,6 +57,10 @@ export default function WeekView({
   calendarView,
   onChangeView,
 }) {
+  const slotHandlersRef = useRef({ onSingle() {}, onDouble() {} });
+  const eventHandlersRef = useRef({ onSingle() {}, onDouble() {} });
+  const slotClickRouterRef = useRef(null);
+  const eventClickRouterRef = useRef(null);
   const weekDays = useMemo(
     () => buildWeekDays(selectedDate, events, timeZone, preferences?.weekStartsOn),
     [selectedDate, events, timeZone, preferences?.weekStartsOn]
@@ -70,6 +68,35 @@ export default function WeekView({
 
   const selectedDay = weekDays.find((day) => day.isSelected) || weekDays[0];
   const weekTitle = formatWeekTitle(weekDays[0].date, weekDays[6].date);
+
+  slotHandlersRef.current.onSingle = ({ date, anchorPoint, selectedDayDate }) => {
+    onSelectDate?.(selectedDayDate || date);
+    onCreateEvent?.({ date, anchorPoint });
+  };
+  slotHandlersRef.current.onDouble = ({ date, selectedDayDate }) => {
+    onSelectDate?.(selectedDayDate || date);
+    onCreateEvent?.({ date, openInDrawer: true });
+  };
+  eventHandlersRef.current.onSingle = ({ event, anchorPoint }) => {
+    onSelectEvent?.({ event, anchorPoint });
+  };
+  eventHandlersRef.current.onDouble = ({ event }) => {
+    onSelectEvent?.({ event, openInDrawer: true });
+  };
+
+  if (!slotClickRouterRef.current) {
+    slotClickRouterRef.current = createClickIntentRouter({
+      onSingle: (payload) => slotHandlersRef.current.onSingle(payload),
+      onDouble: (payload) => slotHandlersRef.current.onDouble(payload),
+    });
+  }
+
+  if (!eventClickRouterRef.current) {
+    eventClickRouterRef.current = createClickIntentRouter({
+      onSingle: (payload) => eventHandlersRef.current.onSingle(payload),
+      onDouble: (payload) => eventHandlersRef.current.onDouble(payload),
+    });
+  }
 
   const goToPreviousWeek = () => {
     const nextDate = new Date(selectedDate);
@@ -87,6 +114,13 @@ export default function WeekView({
     onSelectDate?.(new Date());
   };
 
+  useEffect(() => {
+    return () => {
+      slotClickRouterRef.current?.cancelPending();
+      eventClickRouterRef.current?.cancelPending();
+    };
+  }, []);
+
   return (
     <section className="calendar-card relative flex h-full min-h-0 flex-col overflow-hidden">
       <CalendarViewHeader
@@ -100,7 +134,12 @@ export default function WeekView({
         onNext={goToNextWeek}
         previousLabel="Previous week"
         nextLabel="Next week"
-        onAddEvent={() => onCreateEvent?.(selectedDate)}
+        onAddEvent={(event) =>
+          onCreateEvent?.({
+            date: selectedDate,
+            anchorPoint: getAnchorFromElement(event.currentTarget),
+          })
+        }
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
@@ -143,17 +182,28 @@ export default function WeekView({
             <div key={day.key} className="week-day-column">
               <div className="week-day-slots">
                 {HOURS.map((hour) => (
-                  <div
+                  <button
                     key={`${day.key}-${hour}`}
+                    type="button"
                     className="week-hour-slot"
-                    onContextMenu={(event) => {
-                      event.preventDefault();
+                    onClick={(event) => {
                       const slotDate = new Date(day.date);
                       slotDate.setHours(hour, 0, 0, 0);
-                      onSelectDate?.(day.date);
-                      onCreateEvent?.(slotDate);
+                      slotClickRouterRef.current.handleSingle({
+                        date: slotDate,
+                        anchorPoint: { x: event.clientX, y: event.clientY },
+                        selectedDayDate: day.date,
+                      });
                     }}
-                    title="Right-click to add an event here"
+                    onDoubleClick={() => {
+                      const slotDate = new Date(day.date);
+                      slotDate.setHours(hour, 0, 0, 0);
+                      slotClickRouterRef.current.handleDouble({
+                        date: slotDate,
+                        selectedDayDate: day.date,
+                      });
+                    }}
+                    title="Add an event here"
                   />
                 ))}
               </div>
@@ -165,42 +215,27 @@ export default function WeekView({
                   return (
                     <article
                       key={event.id}
-                      className="week-event-block"
+                      className={`week-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
                       style={{
                         top: `${layout.top}px`,
                         height: `${layout.height}px`,
                         backgroundColor: event.color || '#4f9d69',
                       }}
-                      onClick={() => onSelectEvent?.(event)}
+                      onClick={(clickEvent) =>
+                        eventClickRouterRef.current.handleSingle({
+                          event,
+                          anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                        })
+                      }
+                      onDoubleClick={() =>
+                        eventClickRouterRef.current.handleDouble({
+                          event,
+                        })
+                      }
                     >
-                      <p className="week-event-title">{formatEventHeading(event)}</p>
-                      <p className="week-event-time">
-                        {event.type === 'task'
-                          ? event.completed
-                            ? 'Completed task'
-                            : 'Open task'
-                          : formatTypeLabel(event.type)}
-                      </p>
-                      <p className="week-event-time">
-                        {formatTime(event.startsAt, preferences)} - {formatTime(event.endsAt, preferences)}
-                      </p>
-                      {event.tags?.length ? (
-                        <div className="event-inline-tag-list">
-                          {event.tags.slice(0, 2).map((tag) => (
-                            <span
-                              key={tag.id}
-                              className="event-inline-tag"
-                              style={{
-                                backgroundColor: `${tag.color}22`,
-                                borderColor: `${tag.color}55`,
-                                color: tag.color,
-                              }}
-                            >
-                              {tag.label}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
+                      <p className="calendar-event-card-title">{event.title}</p>
+                      <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
+                      <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
                     </article>
                   );
                 })}
@@ -231,45 +266,29 @@ export default function WeekView({
                 <button
                   type="button"
                   className="day-detail-item-button"
-                  onClick={() => onSelectEvent?.(event)}
+                  onClick={(clickEvent) =>
+                    eventClickRouterRef.current.handleSingle({
+                      event,
+                      anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                    })
+                  }
+                  onDoubleClick={() =>
+                    eventClickRouterRef.current.handleDouble({
+                      event,
+                    })
+                  }
                 >
-                <p className="day-detail-time">{formatTime(event.startsAt, preferences)}</p>
-                <div>
-                  <p className="day-detail-title">{formatEventHeading(event)}</p>
-                  <p className="day-detail-subtle">
-                    {event.type === 'task'
-                      ? event.completed
-                        ? 'Completed task'
-                        : 'Open task'
-                      : formatTypeLabel(event.type)}
-                  </p>
-                  {event.tags?.length ? (
-                    <div className="event-inline-tag-list">
-                      {event.tags.map((tag) => (
-                        <span
-                          key={tag.id}
-                          className="event-inline-tag"
-                          style={{
-                            backgroundColor: `${tag.color}22`,
-                            borderColor: `${tag.color}55`,
-                            color: tag.color,
-                          }}
-                        >
-                          {tag.label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  <p className="day-detail-subtle">
-                    Ends at {formatTime(event.endsAt, preferences)}
-                  </p>
-                </div>
+                  <p className="day-detail-time">{getEventTimeLabel(event, preferences)}</p>
+                  <div>
+                    <p className="day-detail-title">{event.title}</p>
+                    <p className="day-detail-subtle">{getEventContextLabel(event)}</p>
+                  </div>
                 </button>
               </article>
             ))
           ) : (
             <p className="day-detail-empty">
-              No events scheduled for this day yet. Right-click any time slot above to add one.
+              No events scheduled for this day yet. Click any time slot above to add one.
             </p>
           )}
         </div>

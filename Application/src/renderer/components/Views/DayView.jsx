@@ -1,8 +1,9 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { isEventOnDate } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
-import { formatTime } from '../../formatting';
+import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
+import { createClickIntentRouter } from '../../clickIntent';
 
 const ZOOM_LEVELS = [
   {
@@ -47,22 +48,6 @@ function formatMinutesLabel(totalMinutes) {
   const hours = Math.floor(safeMinutes / 60);
   const minutes = safeMinutes % 60;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-}
-
-function formatTypeLabel(type) {
-  if (!type) {
-    return 'Event';
-  }
-
-  return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
-}
-
-function formatEventHeading(event) {
-  if (event.type === 'task') {
-    return event.completed ? `${event.title} (done)` : event.title;
-  }
-
-  return event.title;
 }
 
 function getVisibleWindow(zoomState) {
@@ -146,7 +131,15 @@ function getVisibleEventLayout(event, windowState, pixelsPerHour) {
 
   return {
     top: ((clippedStart - windowState.startMinutes) / 60) * pixelsPerHour,
-    height: Math.max((clippedDuration / 60) * pixelsPerHour, 24),
+    height: Math.max((clippedDuration / 60) * pixelsPerHour, 28),
+  };
+}
+
+function getAnchorFromElement(element) {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.bottom,
   };
 }
 
@@ -162,6 +155,10 @@ export default function DayView({
 }) {
   const [zoomState, setZoomState] = useState(DEFAULT_ZOOM_STATE);
   const timelineBodyRef = useRef(null);
+  const slotHandlersRef = useRef({ onSingle() {}, onDouble() {} });
+  const eventHandlersRef = useRef({ onSingle() {}, onDouble() {} });
+  const slotClickRouterRef = useRef(null);
+  const eventClickRouterRef = useRef(null);
 
   const dayEvents = useMemo(
     () =>
@@ -202,6 +199,35 @@ export default function DayView({
         .filter((item) => item.layout),
     [dayEvents, windowState.startMinutes, windowState.endMinutes, zoomConfig.pixelsPerHour]
   );
+
+  slotHandlersRef.current.onSingle = ({ date, anchorPoint }) => {
+    onSelectDate?.(date);
+    onCreateEvent?.({ date, anchorPoint });
+  };
+  slotHandlersRef.current.onDouble = ({ date }) => {
+    onSelectDate?.(date);
+    onCreateEvent?.({ date, openInDrawer: true });
+  };
+  eventHandlersRef.current.onSingle = ({ event, anchorPoint }) => {
+    onSelectEvent?.({ event, anchorPoint });
+  };
+  eventHandlersRef.current.onDouble = ({ event }) => {
+    onSelectEvent?.({ event, openInDrawer: true });
+  };
+
+  if (!slotClickRouterRef.current) {
+    slotClickRouterRef.current = createClickIntentRouter({
+      onSingle: (payload) => slotHandlersRef.current.onSingle(payload),
+      onDouble: (payload) => slotHandlersRef.current.onDouble(payload),
+    });
+  }
+
+  if (!eventClickRouterRef.current) {
+    eventClickRouterRef.current = createClickIntentRouter({
+      onSingle: (payload) => eventHandlersRef.current.onSingle(payload),
+      onDouble: (payload) => eventHandlersRef.current.onDouble(payload),
+    });
+  }
 
   const getPointerMinutes = (event) => {
     const timelineElement = timelineBodyRef.current;
@@ -266,6 +292,13 @@ export default function DayView({
     onSelectDate?.(new Date());
   };
 
+  useEffect(() => {
+    return () => {
+      slotClickRouterRef.current?.cancelPending();
+      eventClickRouterRef.current?.cancelPending();
+    };
+  }, []);
+
   return (
     <section className="calendar-card relative flex h-full min-h-0 flex-col overflow-hidden">
       <CalendarViewHeader
@@ -279,7 +312,12 @@ export default function DayView({
         onNext={goToNextDay}
         previousLabel="Previous day"
         nextLabel="Next day"
-        onAddEvent={() => onCreateEvent?.(selectedDate)}
+        onAddEvent={(event) =>
+          onCreateEvent?.({
+            date: selectedDate,
+            anchorPoint: getAnchorFromElement(event.currentTarget),
+          })
+        }
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
@@ -307,19 +345,27 @@ export default function DayView({
               }}
             >
               {slots.map((slot) => (
-                <div
+                <button
                   key={slot.key}
+                  type="button"
                   className={[
                     'day-slot',
                     slot.isSubtle ? 'day-slot--half-hour' : '',
                   ]
                     .filter(Boolean)
                     .join(' ')}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    onCreateEvent?.(slot.slotDate);
+                  onClick={(event) => {
+                    slotClickRouterRef.current.handleSingle({
+                      date: slot.slotDate,
+                      anchorPoint: { x: event.clientX, y: event.clientY },
+                    });
                   }}
-                  title={`Right-click to add an event at ${formatMinutesLabel(slot.minutes)}`}
+                  onDoubleClick={() => {
+                    slotClickRouterRef.current.handleDouble({
+                      date: slot.slotDate,
+                    });
+                  }}
+                  title={`Add an event at ${formatMinutesLabel(slot.minutes)}`}
                 />
               ))}
             </div>
@@ -328,42 +374,27 @@ export default function DayView({
               {visibleDayEvents.map(({ event, layout }) => (
                 <article
                   key={event.id}
-                  className="day-event-block"
+                  className={`day-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
                   style={{
                     top: `${layout.top}px`,
                     height: `${layout.height}px`,
                     backgroundColor: event.color || '#4f9d69',
                   }}
-                  onClick={() => onSelectEvent?.(event)}
+                  onClick={(clickEvent) =>
+                    eventClickRouterRef.current.handleSingle({
+                      event,
+                      anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                    })
+                  }
+                  onDoubleClick={() =>
+                    eventClickRouterRef.current.handleDouble({
+                      event,
+                    })
+                  }
                 >
-                  <p className="week-event-title">{formatEventHeading(event)}</p>
-                  <p className="week-event-time">
-                    {event.type === 'task'
-                      ? event.completed
-                        ? 'Completed task'
-                        : 'Open task'
-                      : formatTypeLabel(event.type)}
-                  </p>
-                  <p className="week-event-time">
-                    {formatTime(event.startsAt, preferences)} - {formatTime(event.endsAt, preferences)}
-                  </p>
-                  {event.tags?.length ? (
-                    <div className="event-inline-tag-list">
-                      {event.tags.slice(0, 2).map((tag) => (
-                        <span
-                          key={tag.id}
-                          className="event-inline-tag"
-                          style={{
-                            backgroundColor: `${tag.color}22`,
-                            borderColor: `${tag.color}55`,
-                            color: tag.color,
-                          }}
-                        >
-                          {tag.label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                  <p className="calendar-event-card-title">{event.title}</p>
+                  <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
+                  <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
                 </article>
               ))}
             </div>
@@ -404,6 +435,55 @@ export default function DayView({
               </div>
             </div>
           </aside>
+        </div>
+      </div>
+
+      <div className="day-detail-card">
+        <div className="day-detail-header">
+          <div>
+            <p className="eyebrow">Selected day</p>
+            <h3>
+              {selectedDate.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+              })}
+            </h3>
+          </div>
+        </div>
+
+        <div className="day-detail-list">
+          {dayEvents.length > 0 ? (
+            dayEvents.map((event) => (
+              <article key={event.id} className="day-detail-item">
+                <button
+                  type="button"
+                  className="day-detail-item-button"
+                  onClick={(clickEvent) =>
+                    eventClickRouterRef.current.handleSingle({
+                      event,
+                      anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                    })
+                  }
+                  onDoubleClick={() =>
+                    eventClickRouterRef.current.handleDouble({
+                      event,
+                    })
+                  }
+                >
+                  <p className="day-detail-time">{getEventTimeLabel(event, preferences)}</p>
+                  <div>
+                    <p className="day-detail-title">{event.title}</p>
+                    <p className="day-detail-subtle">{getEventContextLabel(event)}</p>
+                  </div>
+                </button>
+              </article>
+            ))
+          ) : (
+            <p className="day-detail-empty">
+              No events scheduled for this day yet. Click any time slot above to add one.
+            </p>
+          )}
         </div>
       </div>
     </section>

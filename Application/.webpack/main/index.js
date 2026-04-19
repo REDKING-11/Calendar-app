@@ -37,6 +37,7 @@ const {
   TrustedDeviceService
 } = __webpack_require__(/*! ../security/trusted-device-service */ "./src/security/trusted-device-service.js");
 const {
+  normalizeEventType,
   sanitizeEventCreateInput,
   sanitizeEventUpdateInput,
   validateImportPath
@@ -95,11 +96,13 @@ function buildDemoEvents() {
   return [{
     title: 'Local-first architecture review',
     description: 'Walk through the sync model, local data ownership, and next implementation risks.',
-    type: 'event',
+    type: 'meeting',
     completed: false,
     repeat: 'none',
     hasDeadline: false,
     groupName: '',
+    location: 'Studio A',
+    people: ['Product', 'Engineering'],
     startsAt: new Date(year, month, day, 10, 0, 0, 0).toISOString(),
     endsAt: new Date(year, month, day, 11, 0, 0, 0).toISOString(),
     color: '#4f9d69',
@@ -115,11 +118,13 @@ function buildDemoEvents() {
   }, {
     title: 'Phone sync UX sketch',
     description: 'Map the pairing flow and identify where mobile editing should stay intentionally lightweight.',
-    type: 'appointment',
+    type: 'personal',
     completed: false,
     repeat: 'none',
     hasDeadline: false,
     groupName: '',
+    location: 'Cafe drafting corner',
+    people: ['Alex'],
     startsAt: new Date(year, month, day + 1, 14, 0, 0, 0).toISOString(),
     endsAt: new Date(year, month, day + 1, 15, 0, 0, 0).toISOString(),
     color: '#4d8cf5',
@@ -131,11 +136,13 @@ function buildDemoEvents() {
   }, {
     title: 'Pairing flow test',
     description: 'Run through QR-based pairing and confirm the basic LAN sync handoff works.',
-    type: 'task',
+    type: 'focus',
     completed: false,
     repeat: 'weekly',
     hasDeadline: true,
     groupName: 'Launch prep',
+    location: '',
+    people: [],
     startsAt: new Date(year, month, day + 3, 9, 30, 0, 0).toISOString(),
     endsAt: new Date(year, month, day + 3, 10, 0, 0, 0).toISOString(),
     color: '#e3a13b',
@@ -197,6 +204,54 @@ function mergeLegacyTagCatalog(existingTags = [], incomingTags = []) {
     });
   }
   return Array.from(merged.values()).sort((left, right) => left.label.localeCompare(right.label));
+}
+function normalizeStoredNotificationRecipients(recipients = []) {
+  const rawRecipients = Array.isArray(recipients) ? recipients : [recipients];
+  const seen = new Set();
+  return rawRecipients.slice(0, 20).flatMap(recipient => {
+    const normalized = String(recipient || '').trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      return [];
+    }
+    seen.add(normalized);
+    return [normalized];
+  });
+}
+function isStoredNotificationConfigured(notification = {}) {
+  return Boolean(notification?.reminderMinutesBeforeStart !== null && notification?.reminderMinutesBeforeStart !== undefined && (Boolean(notification?.desktopNotificationEnabled) || Boolean(notification?.emailNotificationEnabled) && normalizeStoredNotificationRecipients(notification?.emailNotificationRecipients).length > 0));
+}
+function normalizeStoredNotifications(input = {}) {
+  const notifications = Array.isArray(input?.notifications) ? input.notifications : [];
+  const seenIds = new Set();
+  const normalizedNotifications = notifications.flatMap(notification => {
+    const normalized = {
+      id: String(notification?.id || createId('notification')),
+      reminderMinutesBeforeStart: notification?.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(notification?.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(notification?.emailNotificationEnabled),
+      emailNotificationRecipients: normalizeStoredNotificationRecipients(notification?.emailNotificationRecipients)
+    };
+    if (seenIds.has(normalized.id)) {
+      return [];
+    }
+    seenIds.add(normalized.id);
+    return [normalized];
+  });
+  if (normalizedNotifications.length > 0) {
+    return normalizedNotifications;
+  }
+  const legacyNotification = {
+    id: createId('notification'),
+    reminderMinutesBeforeStart: input?.reminderMinutesBeforeStart ?? null,
+    desktopNotificationEnabled: Boolean(input?.desktopNotificationEnabled),
+    emailNotificationEnabled: Boolean(input?.emailNotificationEnabled),
+    emailNotificationRecipients: normalizeStoredNotificationRecipients(input?.emailNotificationRecipients)
+  };
+  return isStoredNotificationConfigured(legacyNotification) ? [legacyNotification] : [];
+}
+function getPrimaryStoredNotification(input = {}) {
+  const notifications = normalizeStoredNotifications(input);
+  return notifications.find(notification => isStoredNotificationConfigured(notification)) || null;
 }
 function migrateLegacyState(state = {}) {
   const nextState = {
@@ -381,10 +436,24 @@ class CalendarStore {
         approved_at TEXT,
         revoked_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS reminder_dispatch_log (
+        dispatch_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        recipient TEXT NOT NULL DEFAULT '',
+        reminder_at TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(event_id, channel, recipient, reminder_at)
+      );
     `);
   }
   bootstrap() {
-    this.ensureMeta('schemaVersion', '4');
+    const schemaVersion = Number(this.ensureMeta('schemaVersion', '4'));
+    if (!Number.isFinite(schemaVersion) || schemaVersion < 5) {
+      this.setMeta('schemaVersion', '5');
+    }
     this.ensureMeta('lastSequence', '0');
     this.ensureMeta('contentCipherVersion', String(CIPHER_VERSION));
     const preferredDeviceId = this.getMeta('deviceId');
@@ -568,6 +637,13 @@ class CalendarStore {
       title: event.title,
       description: event.description,
       groupName: event.groupName,
+      location: event.location || '',
+      people: event.people || [],
+      reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
+      emailNotificationRecipients: event.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(event),
       tags: event.tags || [],
       externalProviderLinks: event.externalProviderLinks || []
     };
@@ -605,6 +681,11 @@ class CalendarStore {
     });
     return {
       ...event,
+      reminderMinutesBeforeStart: nextContent.reminderMinutesBeforeStart,
+      desktopNotificationEnabled: nextContent.desktopNotificationEnabled,
+      emailNotificationEnabled: nextContent.emailNotificationEnabled,
+      emailNotificationRecipients: nextContent.emailNotificationRecipients,
+      notifications: nextContent.notifications,
       tags: nextContent.tags,
       updatedAt: timestamp,
       updatedBy: this.deviceId
@@ -659,10 +740,22 @@ class CalendarStore {
     return this.snapshot();
   }
   buildEventContent(input) {
+    const notifications = normalizeStoredNotifications(input);
+    const primaryNotification = getPrimaryStoredNotification({
+      ...input,
+      notifications
+    });
     return {
       title: input.title,
       description: input.description || '',
       groupName: input.groupName || '',
+      location: input.location || '',
+      people: Array.isArray(input.people) ? input.people : [],
+      reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
+      emailNotificationRecipients: primaryNotification?.emailNotificationRecipients || [],
+      notifications,
       tags: this.normalizeTags(input.tags || []),
       externalProviderLinks: input.externalProviderLinks || []
     };
@@ -767,11 +860,18 @@ class CalendarStore {
       id: row.id,
       title: content.title,
       description: content.description || '',
-      type: row.type,
+      type: normalizeEventType(row.type),
       completed: Boolean(row.completed),
       repeat: row.repeatRule,
       hasDeadline: Boolean(row.hasDeadline),
       groupName: content.groupName || '',
+      location: content.location || '',
+      people: content.people || [],
+      reminderMinutesBeforeStart: content.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(content.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(content.emailNotificationEnabled),
+      emailNotificationRecipients: content.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(content),
       startsAt: row.startsAt,
       endsAt: row.endsAt,
       color: row.color,
@@ -827,11 +927,13 @@ class CalendarStore {
     return sanitizeEventCreateInput({
       title: holiday.name || holiday.localName || 'Public holiday',
       description: `${HOLIDAY_DESCRIPTION_MARKER} Imported default public holiday for ${countryCode}.`,
-      type: 'event',
+      type: 'personal',
       completed: false,
       repeat: 'none',
       hasDeadline: false,
       groupName: '',
+      location: '',
+      people: [],
       startsAt: new Date(`${holiday.date}T09:00:00`).toISOString(),
       endsAt: new Date(`${holiday.date}T09:30:00`).toISOString(),
       color: HOLIDAY_EVENT_COLOR,
@@ -1018,7 +1120,7 @@ class CalendarStore {
         metadataPatch[field] = patch[field];
       }
     }
-    for (const field of ['title', 'description', 'groupName', 'tags', 'externalProviderLinks']) {
+    for (const field of ['title', 'description', 'groupName', 'location', 'people', 'reminderMinutesBeforeStart', 'desktopNotificationEnabled', 'emailNotificationEnabled', 'emailNotificationRecipients', 'notifications', 'tags', 'externalProviderLinks']) {
       if (patch[field] !== undefined) {
         contentPatch[field] = patch[field];
       }
@@ -1098,11 +1200,18 @@ class CalendarStore {
       id: envelope.entityId,
       title: contentPatch.title || '',
       description: contentPatch.description || '',
-      type: metadataPatch.type || 'event',
+      type: metadataPatch.type || 'meeting',
       completed: metadataPatch.completed ?? false,
       repeat: metadataPatch.repeat || 'none',
       hasDeadline: metadataPatch.hasDeadline ?? false,
       groupName: contentPatch.groupName || '',
+      location: contentPatch.location || '',
+      people: contentPatch.people || [],
+      reminderMinutesBeforeStart: contentPatch.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(contentPatch.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(contentPatch.emailNotificationEnabled),
+      emailNotificationRecipients: contentPatch.emailNotificationRecipients || [],
+      notifications: contentPatch.notifications || [],
       startsAt: metadataPatch.startsAt,
       endsAt: metadataPatch.endsAt,
       color: metadataPatch.color || '#4f9d69',
@@ -1186,6 +1295,13 @@ class CalendarStore {
           title: sanitized.title,
           description: sanitized.description,
           groupName: sanitized.groupName,
+          location: sanitized.location,
+          people: sanitized.people || [],
+          reminderMinutesBeforeStart: sanitized.reminderMinutesBeforeStart ?? null,
+          desktopNotificationEnabled: Boolean(sanitized.desktopNotificationEnabled),
+          emailNotificationEnabled: Boolean(sanitized.emailNotificationEnabled),
+          emailNotificationRecipients: sanitized.emailNotificationRecipients || [],
+          notifications: sanitized.notifications || [],
           tags: content.tags,
           externalProviderLinks: sanitized.externalProviderLinks || []
         }, `event:${envelope.entityId}:content`)
@@ -1312,11 +1428,13 @@ class CalendarStore {
         const migratedInput = sanitizeEventCreateInput({
           title: event.title,
           description: event.description || '',
-          type: event.type || 'event',
+          type: event.type || 'meeting',
           completed: Boolean(event.completed),
           repeat: event.repeat || 'none',
           hasDeadline: Boolean(event.hasDeadline),
           groupName: event.groupName || '',
+          location: event.location || '',
+          people: event.people || [],
           startsAt: event.startsAt,
           endsAt: event.endsAt,
           color: event.color || '#4f9d69',
@@ -1426,6 +1544,13 @@ class CalendarStore {
       title: event.title,
       description: event.description,
       groupName: event.groupName,
+      location: event.location || '',
+      people: event.people || [],
+      reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
+      emailNotificationRecipients: event.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(event),
       tags: event.tags,
       externalProviderLinks: event.externalProviderLinks || []
     };
@@ -1488,6 +1613,27 @@ class CalendarStore {
         }
         if (nextContent.groupName !== currentContent.groupName) {
           changePatch.groupName = nextContent.groupName;
+        }
+        if (nextContent.location !== currentContent.location) {
+          changePatch.location = nextContent.location;
+        }
+        if (JSON.stringify(nextContent.people) !== JSON.stringify(currentContent.people)) {
+          changePatch.people = nextContent.people;
+        }
+        if (nextContent.reminderMinutesBeforeStart !== currentContent.reminderMinutesBeforeStart) {
+          changePatch.reminderMinutesBeforeStart = nextContent.reminderMinutesBeforeStart;
+        }
+        if (nextContent.desktopNotificationEnabled !== currentContent.desktopNotificationEnabled) {
+          changePatch.desktopNotificationEnabled = nextContent.desktopNotificationEnabled;
+        }
+        if (nextContent.emailNotificationEnabled !== currentContent.emailNotificationEnabled) {
+          changePatch.emailNotificationEnabled = nextContent.emailNotificationEnabled;
+        }
+        if (JSON.stringify(nextContent.emailNotificationRecipients) !== JSON.stringify(currentContent.emailNotificationRecipients)) {
+          changePatch.emailNotificationRecipients = nextContent.emailNotificationRecipients;
+        }
+        if (JSON.stringify(nextContent.notifications) !== JSON.stringify(currentContent.notifications)) {
+          changePatch.notifications = nextContent.notifications;
         }
         if (JSON.stringify(nextContent.tags) !== JSON.stringify(currentContent.tags)) {
           changePatch.tags = nextContent.tags;
@@ -1765,7 +1911,93 @@ class CalendarStore {
     });
     return this.getSecuritySnapshot();
   }
+  listDueReminderEntries({
+    now = new Date(),
+    gracePeriodMinutes = 5
+  } = {}) {
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const lowerBound = new Date(nowDate.getTime() - Number(gracePeriodMinutes || 5) * 60 * 1000);
+    return this.listEvents(false).flatMap(event => {
+      const notifications = normalizeStoredNotifications(event);
+      return notifications.flatMap(notification => {
+        const reminderMinutes = Number(notification.reminderMinutesBeforeStart);
+        if (!Number.isFinite(reminderMinutes) || reminderMinutes <= 0) {
+          return [];
+        }
+        if (!notification.desktopNotificationEnabled && !notification.emailNotificationEnabled) {
+          return [];
+        }
+        const reminderAt = new Date(new Date(event.startsAt).getTime() - reminderMinutes * 60 * 1000);
+        if (Number.isNaN(reminderAt.getTime()) || reminderAt > nowDate || reminderAt < lowerBound) {
+          return [];
+        }
+        return [{
+          ...event,
+          notificationId: notification.id,
+          reminderMinutesBeforeStart: notification.reminderMinutesBeforeStart,
+          desktopNotificationEnabled: Boolean(notification.desktopNotificationEnabled),
+          emailNotificationEnabled: Boolean(notification.emailNotificationEnabled),
+          emailNotificationRecipients: notification.emailNotificationRecipients || [],
+          reminderAt: reminderAt.toISOString()
+        }];
+      });
+    });
+  }
+  hasReminderDispatch({
+    eventId,
+    channel,
+    recipient = '',
+    reminderAt
+  }) {
+    const row = this.db.prepare(`SELECT dispatch_id AS dispatchId
+         FROM reminder_dispatch_log
+         WHERE event_id = :eventId
+           AND channel = :channel
+           AND recipient = :recipient
+           AND reminder_at = :reminderAt
+         LIMIT 1`).get({
+      eventId,
+      channel,
+      recipient,
+      reminderAt
+    });
+    return Boolean(row?.dispatchId);
+  }
+  recordReminderDispatch({
+    eventId,
+    channel,
+    recipient = '',
+    reminderAt,
+    sentAt = nowIso()
+  }) {
+    this.db.prepare(`INSERT OR IGNORE INTO reminder_dispatch_log (
+          dispatch_id,
+          event_id,
+          channel,
+          recipient,
+          reminder_at,
+          sent_at,
+          created_at
+        ) VALUES (
+          :dispatchId,
+          :eventId,
+          :channel,
+          :recipient,
+          :reminderAt,
+          :sentAt,
+          :createdAt
+        )`).run({
+      dispatchId: createId('reminder_dispatch'),
+      eventId,
+      channel,
+      recipient,
+      reminderAt,
+      sentAt,
+      createdAt: sentAt
+    });
+  }
   close() {
+    this.oauthService?.close?.();
     this.db.close();
   }
   validateImportPath(candidatePath) {
@@ -1947,6 +2179,183 @@ function registerCalendarHandlers(store) {
 }
 module.exports = {
   registerCalendarHandlers
+};
+
+/***/ },
+
+/***/ "./src/reminder-service.js"
+/*!*********************************!*\
+  !*** ./src/reminder-service.js ***!
+  \*********************************/
+(module) {
+
+function resolveReminderScope(syncPolicy = 'internal_only', visibility = 'private') {
+  if (String(visibility || '').toLowerCase() === 'private') {
+    return 'internal';
+  }
+  const normalizedSyncPolicy = String(syncPolicy || '').toLowerCase();
+  if (normalizedSyncPolicy === 'google_sync') {
+    return 'work';
+  }
+  if (normalizedSyncPolicy === 'microsoft_sync') {
+    return 'personal';
+  }
+  return 'internal';
+}
+function buildTimeLabel(dateValue) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(dateValue));
+}
+function buildDesktopBody(event) {
+  const pieces = [`${buildTimeLabel(event.startsAt)} - ${buildTimeLabel(event.endsAt)}`];
+  if (event.location) {
+    pieces.push(event.location);
+  }
+  return pieces.join('  ');
+}
+function buildEmailBody(event) {
+  const lines = [`Reminder: ${event.title}`, '', `Starts: ${new Date(event.startsAt).toLocaleString()}`, `Ends: ${new Date(event.endsAt).toLocaleString()}`];
+  if (event.location) {
+    lines.push(`Location: ${event.location}`);
+  }
+  if (event.description) {
+    lines.push('', event.description);
+  }
+  return lines.join('\n');
+}
+function buildDispatchChannel(baseChannel, notificationId = '') {
+  return notificationId ? `${baseChannel}:${notificationId}` : baseChannel;
+}
+class ReminderService {
+  constructor({
+    store,
+    oauthService,
+    NotificationClass,
+    pollIntervalMs = 30 * 1000,
+    gracePeriodMinutes = 5,
+    now = () => new Date(),
+    setIntervalImpl = global.setInterval,
+    clearIntervalImpl = global.clearInterval
+  }) {
+    this.store = store;
+    this.oauthService = oauthService;
+    this.NotificationClass = NotificationClass;
+    this.pollIntervalMs = pollIntervalMs;
+    this.gracePeriodMinutes = gracePeriodMinutes;
+    this.now = now;
+    this.setIntervalImpl = setIntervalImpl;
+    this.clearIntervalImpl = clearIntervalImpl;
+    this.intervalHandle = null;
+    this.isPolling = false;
+  }
+  start() {
+    if (this.intervalHandle) {
+      return;
+    }
+    this.intervalHandle = this.setIntervalImpl(() => {
+      void this.pollDueReminders();
+    }, this.pollIntervalMs);
+    void this.pollDueReminders();
+  }
+  stop() {
+    if (this.intervalHandle) {
+      this.clearIntervalImpl(this.intervalHandle);
+      this.intervalHandle = null;
+    }
+  }
+  async pollDueReminders() {
+    if (this.isPolling) {
+      return;
+    }
+    this.isPolling = true;
+    try {
+      const dueEntries = this.store.listDueReminderEntries({
+        now: this.now(),
+        gracePeriodMinutes: this.gracePeriodMinutes
+      });
+      for (const entry of dueEntries) {
+        try {
+          await this.dispatchReminderEntry(entry);
+        } catch {
+          // Keep polling remaining reminders even if one delivery fails.
+        }
+      }
+    } finally {
+      this.isPolling = false;
+    }
+  }
+  showDesktopReminder(entry) {
+    if (!this.NotificationClass) {
+      return;
+    }
+    if (typeof this.NotificationClass.isSupported === 'function' && !this.NotificationClass.isSupported()) {
+      return;
+    }
+    const notification = new this.NotificationClass({
+      title: entry.title,
+      body: buildDesktopBody(entry),
+      silent: false
+    });
+    notification.show();
+  }
+  async dispatchReminderEntry(entry) {
+    const reminderAt = entry.reminderAt;
+    const desktopDispatchChannel = buildDispatchChannel('desktop', entry.notificationId);
+    const emailDispatchChannel = buildDispatchChannel('email', entry.notificationId);
+    if (entry.desktopNotificationEnabled) {
+      const alreadySentDesktop = this.store.hasReminderDispatch({
+        eventId: entry.id,
+        channel: desktopDispatchChannel,
+        recipient: '',
+        reminderAt
+      });
+      if (!alreadySentDesktop) {
+        this.showDesktopReminder(entry);
+        this.store.recordReminderDispatch({
+          eventId: entry.id,
+          channel: desktopDispatchChannel,
+          recipient: '',
+          reminderAt,
+          sentAt: this.now().toISOString()
+        });
+      }
+    }
+    if (entry.emailNotificationEnabled && Array.isArray(entry.emailNotificationRecipients)) {
+      const recipientsToSend = entry.emailNotificationRecipients.filter(recipient => {
+        return !this.store.hasReminderDispatch({
+          eventId: entry.id,
+          channel: emailDispatchChannel,
+          recipient,
+          reminderAt
+        });
+      });
+      if (recipientsToSend.length > 0) {
+        const scope = resolveReminderScope(entry.syncPolicy, entry.visibility);
+        await this.oauthService.sendReminderEmail({
+          scope,
+          recipients: recipientsToSend,
+          subject: `Reminder: ${entry.title}`,
+          bodyText: buildEmailBody(entry)
+        });
+        const sentAt = this.now().toISOString();
+        for (const recipient of recipientsToSend) {
+          this.store.recordReminderDispatch({
+            eventId: entry.id,
+            channel: emailDispatchChannel,
+            recipient,
+            reminderAt,
+            sentAt
+          });
+        }
+      }
+    }
+  }
+}
+module.exports = {
+  ReminderService,
+  resolveReminderScope
 };
 
 /***/ },
@@ -2621,8 +3030,31 @@ module.exports = {
 (module, __unused_webpack_exports, __webpack_require__) {
 
 const crypto = __webpack_require__(/*! node:crypto */ "node:crypto");
+const http = __webpack_require__(/*! node:http */ "node:http");
+const GOOGLE_GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+const MICROSOFT_MAIL_SEND_SCOPE = 'Mail.Send';
+const TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 function nowIso() {
   return new Date().toISOString();
+}
+function parseScopeSet(scopeSet = '') {
+  return String(scopeSet || '').split(/\s+/g).map(scope => scope.trim()).filter(Boolean);
+}
+function getMailSendScope(provider) {
+  if (provider === 'google') {
+    return GOOGLE_GMAIL_SEND_SCOPE;
+  }
+  if (provider === 'microsoft') {
+    return MICROSOFT_MAIL_SEND_SCOPE;
+  }
+  return '';
+}
+function hasMailSendScope(provider, scopeSet = '') {
+  const requiredScope = getMailSendScope(provider);
+  if (!requiredScope) {
+    return false;
+  }
+  return parseScopeSet(scopeSet).includes(requiredScope);
 }
 function decodeJwtPayload(token) {
   if (!token || typeof token !== 'string') {
@@ -2649,6 +3081,7 @@ class OAuthService {
     this.cryptoService = cryptoService;
     this.shell = shell;
     this.onAudit = onAudit;
+    this.callbackServers = new Map();
   }
   getProviders() {
     return [{
@@ -2657,14 +3090,14 @@ class OAuthService {
       configured: Boolean(process.env.CALENDAR_GOOGLE_CLIENT_ID),
       delegatedOnly: true,
       readScopes: ['openid', 'profile', 'email', 'https://www.googleapis.com/auth/calendar.readonly'],
-      writeScopes: ['https://www.googleapis.com/auth/calendar.events']
+      writeScopes: ['https://www.googleapis.com/auth/calendar.events', GOOGLE_GMAIL_SEND_SCOPE]
     }, {
       id: 'microsoft',
       label: 'Microsoft',
       configured: Boolean(process.env.CALENDAR_MICROSOFT_CLIENT_ID),
       delegatedOnly: true,
       readScopes: ['openid', 'profile', 'email', 'offline_access', 'Calendars.Read'],
-      writeScopes: ['Calendars.ReadWrite']
+      writeScopes: ['Calendars.ReadWrite', MICROSOFT_MAIL_SEND_SCOPE]
     }];
   }
   getProviderConfig(provider) {
@@ -2678,7 +3111,7 @@ class OAuthService {
         revokeUrl: 'https://oauth2.googleapis.com/revoke',
         redirectUri: process.env.CALENDAR_GOOGLE_REDIRECT_URI || 'http://127.0.0.1:45781/oauth/google/callback',
         readScopes: ['openid', 'profile', 'email', 'https://www.googleapis.com/auth/calendar.readonly'],
-        writeScopes: ['https://www.googleapis.com/auth/calendar.events'],
+        writeScopes: ['https://www.googleapis.com/auth/calendar.events', GOOGLE_GMAIL_SEND_SCOPE],
         extraParams: {
           access_type: 'offline',
           prompt: 'consent'
@@ -2695,7 +3128,7 @@ class OAuthService {
         revokeUrl: null,
         redirectUri: process.env.CALENDAR_MICROSOFT_REDIRECT_URI || 'http://127.0.0.1:45782/oauth/microsoft/callback',
         readScopes: ['openid', 'profile', 'email', 'offline_access', 'Calendars.Read'],
-        writeScopes: ['Calendars.ReadWrite'],
+        writeScopes: ['Calendars.ReadWrite', MICROSOFT_MAIL_SEND_SCOPE],
         extraParams: {}
       };
     }
@@ -2703,23 +3136,27 @@ class OAuthService {
   }
   listConnectedAccounts() {
     return this.db.prepare(`SELECT
-          account_id AS accountId,
-          provider,
-          subject,
-          email,
-          display_name AS displayName,
-          permission_mode AS permissionMode,
-          status,
-          can_write AS canWrite,
-          write_scope_granted AS writeScopeGranted,
-          created_at AS createdAt,
-          updated_at AS updatedAt,
-          last_sync_at AS lastSyncAt
-         FROM connected_accounts
-         ORDER BY created_at ASC`).all().map(row => ({
+          a.account_id AS accountId,
+          a.provider,
+          a.subject,
+          a.email,
+          a.display_name AS displayName,
+          a.permission_mode AS permissionMode,
+          a.status,
+          a.can_write AS canWrite,
+          a.write_scope_granted AS writeScopeGranted,
+          a.created_at AS createdAt,
+          a.updated_at AS updatedAt,
+          a.last_sync_at AS lastSyncAt,
+          t.scope_set AS scopeSet
+         FROM connected_accounts a
+         LEFT JOIN token_records t ON t.account_id = a.account_id
+         ORDER BY a.created_at ASC`).all().map(row => ({
       ...row,
       canWrite: Boolean(row.canWrite),
-      writeScopeGranted: Boolean(row.writeScopeGranted)
+      writeScopeGranted: Boolean(row.writeScopeGranted),
+      mailScopeGranted: hasMailSendScope(row.provider, row.scopeSet),
+      emailSendCapable: row.status === 'connected' && hasMailSendScope(row.provider, row.scopeSet)
     }));
   }
   buildScopes(config, accessLevel = 'read') {
@@ -2729,11 +3166,87 @@ class OAuthService {
     }
     return Array.from(new Set(scopes));
   }
-  startConnect(provider, accessLevel = 'read') {
+  getOAuthFlow(state) {
+    return this.db.prepare(`SELECT
+          state,
+          provider,
+          requested_access AS requestedAccess,
+          redirect_uri AS redirectUri,
+          code_verifier_cipher_text AS codeVerifierCipherText,
+          created_at AS createdAt,
+          expires_at AS expiresAt
+         FROM oauth_flows
+         WHERE state = :state`).get({
+      state
+    });
+  }
+  async ensureCallbackServer(config) {
+    const redirectUrl = new URL(config.redirectUri);
+    const serverKey = `${redirectUrl.protocol}//${redirectUrl.host}`;
+    if (this.callbackServers.has(serverKey)) {
+      return this.callbackServers.get(serverKey);
+    }
+    const server = http.createServer(async (request, response) => {
+      const requestUrl = new URL(request.url || '/', config.redirectUri);
+      if (requestUrl.pathname !== redirectUrl.pathname) {
+        response.writeHead(404, {
+          'content-type': 'text/plain; charset=utf-8'
+        });
+        response.end('Not found');
+        return;
+      }
+      const state = requestUrl.searchParams.get('state');
+      const code = requestUrl.searchParams.get('code');
+      const error = requestUrl.searchParams.get('error');
+      if (error) {
+        response.writeHead(400, {
+          'content-type': 'text/html; charset=utf-8'
+        });
+        response.end(`<html><body><h1>Calendar connection failed</h1><p>${error}</p><p>You can close this tab and try again.</p></body></html>`);
+        return;
+      }
+      if (!state || !code) {
+        response.writeHead(400, {
+          'content-type': 'text/html; charset=utf-8'
+        });
+        response.end('<html><body><h1>Missing callback data</h1><p>You can close this tab and try again.</p></body></html>');
+        return;
+      }
+      try {
+        const account = await this.finishConnectByState(state, code);
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8'
+        });
+        response.end(`<html><body><h1>Calendar connection complete</h1><p>${account?.email || account?.displayName || 'Account'} is now connected.</p><p>You can close this tab and return to the app.</p></body></html>`);
+      } catch (callbackError) {
+        response.writeHead(500, {
+          'content-type': 'text/html; charset=utf-8'
+        });
+        response.end(`<html><body><h1>Calendar connection failed</h1><p>${callbackError?.message || 'The sign-in could not be completed.'}</p><p>You can close this tab and try again.</p></body></html>`);
+      }
+    });
+    await new Promise((resolve, reject) => {
+      const handleError = error => {
+        server.off('listening', handleListening);
+        reject(error);
+      };
+      const handleListening = () => {
+        server.off('error', handleError);
+        resolve();
+      };
+      server.once('error', handleError);
+      server.once('listening', handleListening);
+      server.listen(Number(redirectUrl.port), redirectUrl.hostname);
+    });
+    this.callbackServers.set(serverKey, server);
+    return server;
+  }
+  async startConnect(provider, accessLevel = 'read') {
     const config = this.getProviderConfig(provider);
     if (!config.clientId) {
       throw new Error(`${provider} OAuth is not configured yet. Add the client ID first.`);
     }
+    await this.ensureCallbackServer(config);
     const state = crypto.randomUUID();
     const codeVerifier = this.cryptoService.randomToken(48);
     const codeChallenge = this.cryptoService.pkceChallenge(codeVerifier);
@@ -2796,30 +3309,104 @@ class OAuthService {
       expiresAt
     };
   }
-  async finishConnect({
+  findExistingAccount(provider, identity = {}) {
+    if (!identity?.sub && !identity?.oid && !identity?.email && !identity?.preferred_username) {
+      return null;
+    }
+    return this.db.prepare(`SELECT
+            account_id AS accountId
+           FROM connected_accounts
+           WHERE provider = :provider
+             AND (
+               (:subject IS NOT NULL AND subject = :subject)
+               OR (:email IS NOT NULL AND LOWER(email) = LOWER(:email))
+             )
+           ORDER BY created_at ASC
+           LIMIT 1`).get({
+      provider,
+      subject: identity.sub || identity.oid || null,
+      email: identity.email || identity.preferred_username || null
+    }) || null;
+  }
+  upsertTokenRecord({
+    accountId,
     provider,
-    state,
-    code
+    scopeSet,
+    tokenPayload,
+    timestamp
   }) {
-    const config = this.getProviderConfig(provider);
-    const flow = this.db.prepare(`SELECT
-          state,
-          provider,
-          requested_access AS requestedAccess,
-          redirect_uri AS redirectUri,
-          code_verifier_cipher_text AS codeVerifierCipherText,
-          expires_at AS expiresAt
-         FROM oauth_flows
-         WHERE state = :state`).get({
-      state
+    const existingToken = this.db.prepare(`SELECT token_id AS tokenId
+         FROM token_records
+         WHERE account_id = :accountId
+         ORDER BY created_at ASC
+         LIMIT 1`).get({
+      accountId
     });
-    if (!flow || flow.provider !== provider) {
+    const tokenId = existingToken?.tokenId || `token_${crypto.randomUUID()}`;
+    const accessTokenCipherText = tokenPayload.access_token ? this.cryptoService.encryptText(tokenPayload.access_token, `oauth-token:${tokenId}:access`) : null;
+    const refreshTokenCipherText = tokenPayload.refresh_token ? this.cryptoService.encryptText(tokenPayload.refresh_token, `oauth-token:${tokenId}:refresh`) : null;
+    const expiresAt = tokenPayload.expires_in ? new Date(Date.now() + Number(tokenPayload.expires_in) * 1000).toISOString() : null;
+    if (existingToken) {
+      this.db.prepare(`UPDATE token_records
+           SET provider = :provider,
+               scope_set = :scopeSet,
+               access_token_cipher_text = :accessTokenCipherText,
+               refresh_token_cipher_text = COALESCE(:refreshTokenCipherText, refresh_token_cipher_text),
+               expires_at = :expiresAt,
+               updated_at = :updatedAt
+           WHERE token_id = :tokenId`).run({
+        tokenId,
+        provider,
+        scopeSet,
+        accessTokenCipherText,
+        refreshTokenCipherText,
+        expiresAt,
+        updatedAt: timestamp
+      });
+      return tokenId;
+    }
+    this.db.prepare(`INSERT INTO token_records (
+          token_id,
+          account_id,
+          provider,
+          scope_set,
+          access_token_cipher_text,
+          refresh_token_cipher_text,
+          expires_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          :tokenId,
+          :accountId,
+          :provider,
+          :scopeSet,
+          :accessTokenCipherText,
+          :refreshTokenCipherText,
+          :expiresAt,
+          :createdAt,
+          :updatedAt
+        )`).run({
+      tokenId,
+      accountId,
+      provider,
+      scopeSet,
+      accessTokenCipherText,
+      refreshTokenCipherText,
+      expiresAt,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    return tokenId;
+  }
+  async finishConnectWithFlow(flow, code) {
+    if (!flow) {
       throw new Error('OAuth flow was not found.');
     }
     if (new Date(flow.expiresAt).getTime() < Date.now()) {
       throw new Error('OAuth flow has expired.');
     }
-    const codeVerifier = this.cryptoService.decryptText(flow.codeVerifierCipherText, `oauth-flow:${state}`);
+    const config = this.getProviderConfig(flow.provider);
+    const codeVerifier = this.cryptoService.decryptText(flow.codeVerifierCipherText, `oauth-flow:${flow.state}`);
     const tokenResponse = await fetch(config.tokenUrl, {
       method: 'POST',
       headers: {
@@ -2839,82 +3426,80 @@ class OAuthService {
     }
     const tokenPayload = await tokenResponse.json();
     const identity = decodeJwtPayload(tokenPayload.id_token) || {};
-    const accountId = `acct_${crypto.randomUUID()}`;
-    const tokenId = `token_${crypto.randomUUID()}`;
     const timestamp = nowIso();
     const canWrite = flow.requestedAccess === 'write';
     const scopeSet = String(tokenPayload.scope || this.buildScopes(config, flow.requestedAccess).join(' '));
+    const existingAccount = this.findExistingAccount(flow.provider, identity);
+    const accountId = existingAccount?.accountId || `acct_${crypto.randomUUID()}`;
     this.db.exec('BEGIN');
     try {
-      this.db.prepare(`INSERT INTO connected_accounts (
-            account_id,
-            provider,
-            subject,
-            email,
-            display_name,
-            permission_mode,
-            status,
-            can_write,
-            write_scope_granted,
-            created_at,
-            updated_at
-          ) VALUES (
-            :accountId,
-            :provider,
-            :subject,
-            :email,
-            :displayName,
-            :permissionMode,
-            'connected',
-            :canWrite,
-            :writeScopeGranted,
-            :createdAt,
-            :updatedAt
-          )`).run({
+      if (existingAccount) {
+        this.db.prepare(`UPDATE connected_accounts
+             SET subject = :subject,
+                 email = :email,
+                 display_name = :displayName,
+                 permission_mode = :permissionMode,
+                 status = 'connected',
+                 can_write = :canWrite,
+                 write_scope_granted = :writeScopeGranted,
+                 updated_at = :updatedAt
+             WHERE account_id = :accountId`).run({
+          accountId,
+          subject: identity.sub || identity.oid || null,
+          email: identity.email || identity.preferred_username || null,
+          displayName: identity.name || identity.given_name || flow.provider,
+          permissionMode: flow.requestedAccess,
+          canWrite: canWrite ? 1 : 0,
+          writeScopeGranted: canWrite ? 1 : 0,
+          updatedAt: timestamp
+        });
+      } else {
+        this.db.prepare(`INSERT INTO connected_accounts (
+              account_id,
+              provider,
+              subject,
+              email,
+              display_name,
+              permission_mode,
+              status,
+              can_write,
+              write_scope_granted,
+              created_at,
+              updated_at
+            ) VALUES (
+              :accountId,
+              :provider,
+              :subject,
+              :email,
+              :displayName,
+              :permissionMode,
+              'connected',
+              :canWrite,
+              :writeScopeGranted,
+              :createdAt,
+              :updatedAt
+            )`).run({
+          accountId,
+          provider: flow.provider,
+          subject: identity.sub || identity.oid || null,
+          email: identity.email || identity.preferred_username || null,
+          displayName: identity.name || identity.given_name || flow.provider,
+          permissionMode: flow.requestedAccess,
+          canWrite: canWrite ? 1 : 0,
+          writeScopeGranted: canWrite ? 1 : 0,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
+      }
+      this.upsertTokenRecord({
         accountId,
-        provider,
-        subject: identity.sub || identity.oid || null,
-        email: identity.email || identity.preferred_username || null,
-        displayName: identity.name || identity.given_name || provider,
-        permissionMode: flow.requestedAccess,
-        canWrite: canWrite ? 1 : 0,
-        writeScopeGranted: canWrite ? 1 : 0,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      });
-      this.db.prepare(`INSERT INTO token_records (
-            token_id,
-            account_id,
-            provider,
-            scope_set,
-            access_token_cipher_text,
-            refresh_token_cipher_text,
-            expires_at,
-            created_at,
-            updated_at
-          ) VALUES (
-            :tokenId,
-            :accountId,
-            :provider,
-            :scopeSet,
-            :accessTokenCipherText,
-            :refreshTokenCipherText,
-            :expiresAt,
-            :createdAt,
-            :updatedAt
-          )`).run({
-        tokenId,
-        accountId,
-        provider,
+        provider: flow.provider,
         scopeSet,
-        accessTokenCipherText: tokenPayload.access_token ? this.cryptoService.encryptText(tokenPayload.access_token, `oauth-token:${tokenId}:access`) : null,
-        refreshTokenCipherText: tokenPayload.refresh_token ? this.cryptoService.encryptText(tokenPayload.refresh_token, `oauth-token:${tokenId}:refresh`) : null,
-        expiresAt: tokenPayload.expires_in ? new Date(Date.now() + Number(tokenPayload.expires_in) * 1000).toISOString() : null,
-        createdAt: timestamp,
-        updatedAt: timestamp
+        tokenPayload,
+        timestamp
       });
       this.db.prepare('DELETE FROM oauth_flows WHERE state = :state').run({
-        state
+        state: flow.state
       });
       this.db.exec('COMMIT');
     } catch (error) {
@@ -2925,11 +3510,185 @@ class OAuthService {
       targetType: 'account',
       targetId: accountId,
       details: {
-        provider,
-        permissionMode: flow.requestedAccess
+        provider: flow.provider,
+        permissionMode: flow.requestedAccess,
+        mailScopeGranted: hasMailSendScope(flow.provider, scopeSet)
       }
     });
     return this.listConnectedAccounts().find(account => account.accountId === accountId);
+  }
+  async finishConnectByState(state, code) {
+    const flow = this.getOAuthFlow(state);
+    return this.finishConnectWithFlow(flow, code);
+  }
+  async finishConnect({
+    provider,
+    state,
+    code
+  }) {
+    const flow = this.getOAuthFlow(state);
+    if (!flow || flow.provider !== provider) {
+      throw new Error('OAuth flow was not found.');
+    }
+    return this.finishConnectWithFlow(flow, code);
+  }
+  getAccountTokenRow(accountId) {
+    return this.db.prepare(`SELECT
+          a.account_id AS accountId,
+          a.provider,
+          a.email,
+          a.display_name AS displayName,
+          a.status,
+          t.token_id AS tokenId,
+          t.scope_set AS scopeSet,
+          t.access_token_cipher_text AS accessTokenCipherText,
+          t.refresh_token_cipher_text AS refreshTokenCipherText,
+          t.expires_at AS expiresAt
+         FROM connected_accounts a
+         LEFT JOIN token_records t ON t.account_id = a.account_id
+         WHERE a.account_id = :accountId
+         LIMIT 1`).get({
+      accountId
+    });
+  }
+  async refreshAccessToken(accountId) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account?.tokenId || !account?.refreshTokenCipherText) {
+      throw new Error('A refresh token is not available for this account.');
+    }
+    const config = this.getProviderConfig(account.provider);
+    const refreshToken = this.cryptoService.decryptText(account.refreshTokenCipherText, `oauth-token:${account.tokenId}:refresh`);
+    const tokenResponse = await fetch(config.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: config.clientId,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken
+      })
+    });
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      throw new Error(`OAuth token refresh failed: ${errorText}`);
+    }
+    const tokenPayload = await tokenResponse.json();
+    const timestamp = nowIso();
+    const nextScopeSet = String(tokenPayload.scope || account.scopeSet || '');
+    this.db.prepare(`UPDATE token_records
+         SET scope_set = :scopeSet,
+             access_token_cipher_text = :accessTokenCipherText,
+             refresh_token_cipher_text = COALESCE(:refreshTokenCipherText, refresh_token_cipher_text),
+             expires_at = :expiresAt,
+             updated_at = :updatedAt
+         WHERE token_id = :tokenId`).run({
+      tokenId: account.tokenId,
+      scopeSet: nextScopeSet,
+      accessTokenCipherText: tokenPayload.access_token ? this.cryptoService.encryptText(tokenPayload.access_token, `oauth-token:${account.tokenId}:access`) : account.accessTokenCipherText,
+      refreshTokenCipherText: tokenPayload.refresh_token ? this.cryptoService.encryptText(tokenPayload.refresh_token, `oauth-token:${account.tokenId}:refresh`) : null,
+      expiresAt: tokenPayload.expires_in ? new Date(Date.now() + Number(tokenPayload.expires_in) * 1000).toISOString() : account.expiresAt,
+      updatedAt: timestamp
+    });
+    return this.getAccountTokenRow(accountId);
+  }
+  async getAccessTokenForAccount(accountId) {
+    let account = this.getAccountTokenRow(accountId);
+    if (!account?.tokenId || !account?.accessTokenCipherText) {
+      throw new Error('Connected account token was not found.');
+    }
+    const expiresAtTime = account.expiresAt ? new Date(account.expiresAt).getTime() : null;
+    if (expiresAtTime && expiresAtTime - TOKEN_REFRESH_SKEW_MS <= Date.now()) {
+      account = await this.refreshAccessToken(accountId);
+    }
+    if (!account?.accessTokenCipherText) {
+      throw new Error('Connected account token was not found.');
+    }
+    return this.cryptoService.decryptText(account.accessTokenCipherText, `oauth-token:${account.tokenId}:access`);
+  }
+  resolveReminderSenderAccount(scope = 'internal') {
+    const accounts = this.listConnectedAccounts().filter(account => account.emailSendCapable);
+    if (scope === 'work') {
+      return accounts.find(account => account.provider === 'google') || null;
+    }
+    if (scope === 'personal') {
+      return accounts.find(account => account.provider === 'microsoft') || null;
+    }
+    return accounts[0] || null;
+  }
+  async sendEmailViaGoogle(accessToken, recipient, subject, bodyText) {
+    const mimeMessage = [`To: ${recipient}`, `Subject: ${subject}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', '', bodyText].join('\r\n');
+    const raw = Buffer.from(mimeMessage, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        raw
+      })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Google email send failed: ${errorText}`);
+    }
+  }
+  async sendEmailViaMicrosoft(accessToken, recipient, subject, bodyText) {
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: {
+            contentType: 'Text',
+            content: bodyText
+          },
+          toRecipients: [{
+            emailAddress: {
+              address: recipient
+            }
+          }]
+        },
+        saveToSentItems: false
+      })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Microsoft email send failed: ${errorText}`);
+    }
+  }
+  async sendReminderEmail({
+    scope = 'internal',
+    recipients = [],
+    subject,
+    bodyText
+  }) {
+    const senderAccount = this.resolveReminderSenderAccount(scope);
+    if (!senderAccount) {
+      throw new Error('No connected account with mail permissions is available for this scope.');
+    }
+    const accessToken = await this.getAccessTokenForAccount(senderAccount.accountId);
+    for (const recipient of recipients) {
+      if (senderAccount.provider === 'google') {
+        await this.sendEmailViaGoogle(accessToken, recipient, subject, bodyText);
+        continue;
+      }
+      if (senderAccount.provider === 'microsoft') {
+        await this.sendEmailViaMicrosoft(accessToken, recipient, subject, bodyText);
+        continue;
+      }
+      throw new Error(`Unsupported reminder email provider: ${senderAccount.provider}`);
+    }
+    return {
+      senderAccountId: senderAccount.accountId,
+      provider: senderAccount.provider,
+      recipients
+    };
   }
   disconnectAccount(accountId) {
     const timestamp = nowIso();
@@ -3009,6 +3768,12 @@ class OAuthService {
       }
     });
     return disconnected;
+  }
+  close() {
+    for (const server of this.callbackServers.values()) {
+      server.close();
+    }
+    this.callbackServers.clear();
   }
 }
 module.exports = {
@@ -3607,10 +4372,26 @@ module.exports = {
 (module, __unused_webpack_exports, __webpack_require__) {
 
 const path = __webpack_require__(/*! node:path */ "node:path");
-const EVENT_TYPES = new Set(['event', 'task', 'appointment']);
+const EVENT_TYPES = new Set(['meeting', 'focus', 'personal']);
+const EVENT_TYPE_ALIASES = {
+  event: 'meeting',
+  task: 'focus',
+  appointment: 'personal'
+};
 const REPEAT_OPTIONS = new Set(['none', 'daily', 'weekly', 'monthly']);
+const MAX_REMINDER_MINUTES = 365 * 24 * 60;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const SYNC_POLICIES = new Set(['internal_only', 'google_sync', 'microsoft_sync', 'shared', 'relay_sync']);
+const SYNC_POLICY_ALIASES = {
+  internal: 'internal_only',
+  work: 'google_sync',
+  personal: 'microsoft_sync'
+};
 const VISIBILITY_OPTIONS = new Set(['private', 'busy_only', 'shared_read', 'shared_edit']);
+const VISIBILITY_ALIASES = {
+  internal: 'private',
+  external: 'busy_only'
+};
 function sanitizeInlineText(value, maxLength = 160) {
   return String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
@@ -3630,6 +4411,25 @@ function sanitizeIsoDate(value, fieldName) {
 }
 function sanitizeBoolean(value) {
   return Boolean(value);
+}
+function mapEventTypeValue(value) {
+  const candidate = sanitizeInlineText(value, 32).toLowerCase();
+  return EVENT_TYPE_ALIASES[candidate] || candidate;
+}
+function normalizeEventType(value, fallback = 'meeting') {
+  const candidate = mapEventTypeValue(value);
+  if (EVENT_TYPES.has(candidate)) {
+    return candidate;
+  }
+  const fallbackCandidate = mapEventTypeValue(fallback);
+  return EVENT_TYPES.has(fallbackCandidate) ? fallbackCandidate : 'meeting';
+}
+function sanitizeEventType(value, fallback = 'meeting') {
+  const candidate = mapEventTypeValue(value || fallback);
+  if (!EVENT_TYPES.has(candidate)) {
+    throw new Error('Unsupported event type.');
+  }
+  return candidate;
 }
 function sanitizeUrl(value) {
   const candidate = sanitizeInlineText(value, 2048);
@@ -3686,13 +4486,101 @@ function normalizeTags(tags = []) {
     }];
   });
 }
+function normalizePeople(people = []) {
+  const rawPeople = Array.isArray(people) ? people : String(people ?? '').split(/[\n,;]+/g).map(person => person.trim());
+  const seen = new Set();
+  return rawPeople.slice(0, 20).flatMap(person => {
+    const value = sanitizeInlineText(person, 120);
+    if (!value) {
+      return [];
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [value];
+  });
+}
 function sanitizeSyncPolicy(value, fallback = 'internal_only') {
   const candidate = sanitizeInlineText(value, 40).toLowerCase();
-  return SYNC_POLICIES.has(candidate) ? candidate : fallback;
+  const mappedCandidate = SYNC_POLICY_ALIASES[candidate] || candidate;
+  const mappedFallback = SYNC_POLICY_ALIASES[fallback] || fallback;
+  return SYNC_POLICIES.has(mappedCandidate) ? mappedCandidate : mappedFallback;
 }
 function sanitizeVisibility(value, fallback = 'private') {
   const candidate = sanitizeInlineText(value, 40).toLowerCase();
-  return VISIBILITY_OPTIONS.has(candidate) ? candidate : fallback;
+  const mappedCandidate = VISIBILITY_ALIASES[candidate] || candidate;
+  const mappedFallback = VISIBILITY_ALIASES[fallback] || fallback;
+  return VISIBILITY_OPTIONS.has(mappedCandidate) ? mappedCandidate : mappedFallback;
+}
+function sanitizeReminderMinutesBeforeStart(value) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0 || numeric > MAX_REMINDER_MINUTES) {
+    throw new Error('Reminder value must be a whole number of minutes.');
+  }
+  return numeric;
+}
+function sanitizeNotificationRecipients(recipients = []) {
+  const rawRecipients = Array.isArray(recipients) ? recipients : String(recipients ?? '').split(/[\n,;]+/g).map(recipient => recipient.trim());
+  const seen = new Set();
+  return rawRecipients.slice(0, 20).flatMap(recipient => {
+    const normalized = sanitizeInlineText(recipient, 160).toLowerCase();
+    if (!normalized) {
+      return [];
+    }
+    if (!EMAIL_PATTERN.test(normalized)) {
+      throw new Error('Notification recipients must be valid email addresses.');
+    }
+    if (seen.has(normalized)) {
+      return [];
+    }
+    seen.add(normalized);
+    return [normalized];
+  });
+}
+function sanitizeNotificationEntry(notification = {}) {
+  const reminderMinutesBeforeStart = sanitizeReminderMinutesBeforeStart(notification.reminderMinutesBeforeStart);
+  const desktopNotificationEnabled = sanitizeBoolean(notification.desktopNotificationEnabled);
+  const emailNotificationEnabled = sanitizeBoolean(notification.emailNotificationEnabled);
+  const emailNotificationRecipients = sanitizeNotificationRecipients(notification.emailNotificationRecipients);
+  if (reminderMinutesBeforeStart === null) {
+    throw new Error('Notification timing is required.');
+  }
+  if (!desktopNotificationEnabled && !emailNotificationEnabled) {
+    throw new Error('Notification must send to this machine, email, or both.');
+  }
+  if (emailNotificationEnabled && emailNotificationRecipients.length === 0) {
+    throw new Error('Email notifications need at least one recipient.');
+  }
+  return {
+    id: sanitizeInlineText(notification.id, 120) || null,
+    reminderMinutesBeforeStart,
+    desktopNotificationEnabled,
+    emailNotificationEnabled,
+    emailNotificationRecipients
+  };
+}
+function sanitizeNotifications(notifications = []) {
+  if (notifications === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(notifications)) {
+    throw new Error('Notifications must be an array.');
+  }
+  const seenKeys = new Set();
+  return notifications.flatMap((notification, index) => {
+    const sanitized = sanitizeNotificationEntry(notification);
+    const key = sanitized.id || `${sanitized.reminderMinutesBeforeStart}:${index}`;
+    if (seenKeys.has(key)) {
+      return [];
+    }
+    seenKeys.add(key);
+    return [sanitized];
+  });
 }
 function sanitizeEventCreateInput(input = {}) {
   const title = sanitizeInlineText(input.title, 160);
@@ -3704,24 +4592,34 @@ function sanitizeEventCreateInput(input = {}) {
   if (new Date(endsAt) <= new Date(startsAt)) {
     throw new Error('Event end time must be after the start time.');
   }
-  const type = sanitizeInlineText(input.type || 'event', 32).toLowerCase();
-  if (!EVENT_TYPES.has(type)) {
-    throw new Error('Unsupported event type.');
-  }
   const repeat = sanitizeInlineText(input.repeat || 'none', 32).toLowerCase();
   if (!REPEAT_OPTIONS.has(repeat)) {
     throw new Error('Unsupported repeat value.');
   }
+  const notifications = sanitizeNotifications(input.notifications) || [];
+  const primaryNotification = notifications[0] || (input.reminderMinutesBeforeStart !== undefined || input.desktopNotificationEnabled !== undefined || input.emailNotificationEnabled !== undefined || input.emailNotificationRecipients !== undefined ? {
+    reminderMinutesBeforeStart: sanitizeReminderMinutesBeforeStart(input.reminderMinutesBeforeStart),
+    desktopNotificationEnabled: sanitizeBoolean(input.desktopNotificationEnabled),
+    emailNotificationEnabled: sanitizeBoolean(input.emailNotificationEnabled),
+    emailNotificationRecipients: sanitizeNotificationRecipients(input.emailNotificationRecipients)
+  } : null);
   return {
     title,
     description: sanitizeMultilineText(input.description, 5000),
-    type,
+    type: sanitizeEventType(input.type || 'meeting'),
     completed: sanitizeBoolean(input.completed),
     repeat,
     hasDeadline: sanitizeBoolean(input.hasDeadline),
     groupName: sanitizeInlineText(input.groupName, 120),
+    location: sanitizeInlineText(input.location, 160),
+    people: normalizePeople(input.people),
     startsAt,
     endsAt,
+    reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
+    desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
+    emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
+    emailNotificationRecipients: primaryNotification?.emailNotificationRecipients || [],
+    notifications,
     color: sanitizeColor(input.color),
     tags: normalizeTags(input.tags),
     syncPolicy: sanitizeSyncPolicy(input.syncPolicy),
@@ -3731,6 +4629,7 @@ function sanitizeEventCreateInput(input = {}) {
 }
 function sanitizeEventUpdateInput(input = {}) {
   const sanitized = {};
+  let notificationsOverride = null;
   if (input.title !== undefined) {
     const title = sanitizeInlineText(input.title, 160);
     if (!title) {
@@ -3742,11 +4641,7 @@ function sanitizeEventUpdateInput(input = {}) {
     sanitized.description = sanitizeMultilineText(input.description, 5000);
   }
   if (input.type !== undefined) {
-    const type = sanitizeInlineText(input.type, 32).toLowerCase();
-    if (!EVENT_TYPES.has(type)) {
-      throw new Error('Unsupported event type.');
-    }
-    sanitized.type = type;
+    sanitized.type = sanitizeEventType(input.type);
   }
   if (input.repeat !== undefined) {
     const repeat = sanitizeInlineText(input.repeat, 32).toLowerCase();
@@ -3764,6 +4659,12 @@ function sanitizeEventUpdateInput(input = {}) {
   if (input.groupName !== undefined) {
     sanitized.groupName = sanitizeInlineText(input.groupName, 120);
   }
+  if (input.location !== undefined) {
+    sanitized.location = sanitizeInlineText(input.location, 160);
+  }
+  if (input.people !== undefined) {
+    sanitized.people = normalizePeople(input.people);
+  }
   if (input.startsAt !== undefined) {
     sanitized.startsAt = sanitizeIsoDate(input.startsAt, 'startsAt');
   }
@@ -3777,6 +4678,28 @@ function sanitizeEventUpdateInput(input = {}) {
   }
   if (input.color !== undefined) {
     sanitized.color = sanitizeColor(input.color);
+  }
+  if (input.reminderMinutesBeforeStart !== undefined) {
+    sanitized.reminderMinutesBeforeStart = sanitizeReminderMinutesBeforeStart(input.reminderMinutesBeforeStart);
+  }
+  if (input.desktopNotificationEnabled !== undefined) {
+    sanitized.desktopNotificationEnabled = sanitizeBoolean(input.desktopNotificationEnabled);
+  }
+  if (input.emailNotificationEnabled !== undefined) {
+    sanitized.emailNotificationEnabled = sanitizeBoolean(input.emailNotificationEnabled);
+  }
+  if (input.emailNotificationRecipients !== undefined) {
+    sanitized.emailNotificationRecipients = sanitizeNotificationRecipients(input.emailNotificationRecipients);
+  }
+  if (input.notifications !== undefined) {
+    notificationsOverride = sanitizeNotifications(input.notifications);
+    sanitized.notifications = notificationsOverride;
+  }
+  if (notificationsOverride) {
+    sanitized.reminderMinutesBeforeStart = notificationsOverride[0]?.reminderMinutesBeforeStart ?? null;
+    sanitized.desktopNotificationEnabled = Boolean(notificationsOverride[0]?.desktopNotificationEnabled);
+    sanitized.emailNotificationEnabled = Boolean(notificationsOverride[0]?.emailNotificationEnabled);
+    sanitized.emailNotificationRecipients = notificationsOverride[0]?.emailNotificationRecipients || [];
   }
   if (input.tags !== undefined) {
     sanitized.tags = normalizeTags(input.tags);
@@ -3805,6 +4728,7 @@ function validateImportPath(candidatePath, allowedBaseDir) {
   return resolvedPath;
 }
 module.exports = {
+  normalizeEventType,
   sanitizeEventCreateInput,
   sanitizeEventUpdateInput,
   validateImportPath
@@ -27103,6 +28027,17 @@ module.exports = require("node:crypto");
 
 "use strict";
 module.exports = require("node:fs");
+
+/***/ },
+
+/***/ "node:http"
+/*!****************************!*\
+  !*** external "node:http" ***!
+  \****************************/
+(module) {
+
+"use strict";
+module.exports = require("node:http");
 
 /***/ },
 
@@ -77635,6 +78570,7 @@ const path = __webpack_require__(/*! path */ "path");
 const {
   app,
   BrowserWindow,
+  Notification,
   dialog,
   ipcMain,
   safeStorage,
@@ -77646,8 +78582,12 @@ const {
 const {
   registerCalendarHandlers
 } = __webpack_require__(/*! ./ipc/calendar-ipc */ "./src/ipc/calendar-ipc.js");
+const {
+  ReminderService
+} = __webpack_require__(/*! ./reminder-service */ "./src/reminder-service.js");
 let mainWindow = null;
 let settingsWindow = null;
+let reminderService = null;
 function withWindowMode(url, mode) {
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}window=${mode}`;
@@ -77703,6 +78643,12 @@ app.whenReady().then(() => {
     shell
   });
   registerCalendarHandlers(store);
+  reminderService = new ReminderService({
+    store,
+    oauthService: store.oauthService,
+    NotificationClass: Notification
+  });
+  reminderService.start();
   createWindow();
   ipcMain.removeHandler('app:openSettingsWindow');
   ipcMain.removeHandler('app:closeCurrentWindow');
@@ -77735,9 +78681,13 @@ app.whenReady().then(() => {
   });
 });
 app.on('window-all-closed', () => {
+  reminderService?.stop?.();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+app.on('before-quit', () => {
+  reminderService?.stop?.();
 });
 })();
 

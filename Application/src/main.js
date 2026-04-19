@@ -1,10 +1,12 @@
 const path = require('path');
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, Notification, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { CalendarStore } = require('./data/calendar-store');
 const { registerCalendarHandlers } = require('./ipc/calendar-ipc');
+const { ReminderService } = require('./reminder-service');
 
 let mainWindow = null;
 let settingsWindow = null;
+let reminderService = null;
 
 function withWindowMode(url, mode) {
   const separator = url.includes('?') ? '&' : '?';
@@ -76,6 +78,12 @@ app.whenReady().then(() => {
     shell,
   });
   registerCalendarHandlers(store);
+  reminderService = new ReminderService({
+    store,
+    oauthService: store.oauthService,
+    NotificationClass: Notification,
+  });
+  reminderService.start();
   createWindow();
 
   ipcMain.removeHandler('app:openSettingsWindow');
@@ -106,7 +114,12 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  reminderService?.stop?.();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  reminderService?.stop?.();
 });

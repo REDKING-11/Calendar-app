@@ -9,7 +9,6 @@ export default function YearView({
   timeZone,
   selectedDate,
   onSelectMonth,
-  onCreateEvent,
   onSelectDate,
   calendarView,
   onChangeView,
@@ -52,7 +51,6 @@ export default function YearView({
         onNext={goToNextYear}
         previousLabel="Previous year"
         nextLabel="Next year"
-        onAddEvent={() => onCreateEvent?.(selectedDate)}
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 

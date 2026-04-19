@@ -196,7 +196,12 @@ export default function Sidebar({
       <div className="flex h-full flex-col">
         <button
           type="button"
-          onClick={() => onCreateEvent?.(selectedDate || new Date())}
+          onClick={() =>
+            onCreateEvent?.({
+              date: selectedDate || new Date(),
+              openInDrawer: true,
+            })
+          }
           className="app-button app-button--primary flex items-center justify-between rounded-2xl px-5 py-4 text-left"
         >
           <span className="flex items-center gap-3">

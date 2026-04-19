@@ -62,13 +62,15 @@ export default function CalendarViewHeader({
       </div>
 
       <div className="calendar-header-actions">
-        <button
-          type="button"
-          className="calendar-header-button calendar-header-button--primary calendar-header-primary-action"
-          onClick={onAddEvent}
-        >
-          Add event
-        </button>
+        {onAddEvent ? (
+          <button
+            type="button"
+            className="calendar-header-button calendar-header-button--primary calendar-header-primary-action"
+            onClick={(event) => onAddEvent?.(event)}
+          >
+            Add event
+          </button>
+        ) : null}
         {secondaryAction ? <div className="calendar-secondary-actions">{secondaryAction}</div> : null}
       </div>
     </header>

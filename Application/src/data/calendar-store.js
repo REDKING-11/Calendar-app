@@ -12,6 +12,7 @@ const { ReauthService } = require('../security/reauth-service');
 const { SecureVault } = require('../security/secure-vault');
 const { TrustedDeviceService } = require('../security/trusted-device-service');
 const {
+  normalizeEventType,
   sanitizeEventCreateInput,
   sanitizeEventUpdateInput,
   validateImportPath,
@@ -96,11 +97,13 @@ function buildDemoEvents() {
     {
       title: 'Local-first architecture review',
       description: 'Walk through the sync model, local data ownership, and next implementation risks.',
-      type: 'event',
+      type: 'meeting',
       completed: false,
       repeat: 'none',
       hasDeadline: false,
       groupName: '',
+      location: 'Studio A',
+      people: ['Product', 'Engineering'],
       startsAt: new Date(year, month, day, 10, 0, 0, 0).toISOString(),
       endsAt: new Date(year, month, day, 11, 0, 0, 0).toISOString(),
       color: '#4f9d69',
@@ -112,11 +115,13 @@ function buildDemoEvents() {
     {
       title: 'Phone sync UX sketch',
       description: 'Map the pairing flow and identify where mobile editing should stay intentionally lightweight.',
-      type: 'appointment',
+      type: 'personal',
       completed: false,
       repeat: 'none',
       hasDeadline: false,
       groupName: '',
+      location: 'Cafe drafting corner',
+      people: ['Alex'],
       startsAt: new Date(year, month, day + 1, 14, 0, 0, 0).toISOString(),
       endsAt: new Date(year, month, day + 1, 15, 0, 0, 0).toISOString(),
       color: '#4d8cf5',
@@ -125,11 +130,13 @@ function buildDemoEvents() {
     {
       title: 'Pairing flow test',
       description: 'Run through QR-based pairing and confirm the basic LAN sync handoff works.',
-      type: 'task',
+      type: 'focus',
       completed: false,
       repeat: 'weekly',
       hasDeadline: true,
       groupName: 'Launch prep',
+      location: '',
+      people: [],
       startsAt: new Date(year, month, day + 3, 9, 30, 0, 0).toISOString(),
       endsAt: new Date(year, month, day + 3, 10, 0, 0, 0).toISOString(),
       color: '#e3a13b',
@@ -205,6 +212,77 @@ function mergeLegacyTagCatalog(existingTags = [], incomingTags = []) {
   return Array.from(merged.values()).sort((left, right) =>
     left.label.localeCompare(right.label)
   );
+}
+
+function normalizeStoredNotificationRecipients(recipients = []) {
+  const rawRecipients = Array.isArray(recipients) ? recipients : [recipients];
+  const seen = new Set();
+
+  return rawRecipients.slice(0, 20).flatMap((recipient) => {
+    const normalized = String(recipient || '').trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      return [];
+    }
+
+    seen.add(normalized);
+    return [normalized];
+  });
+}
+
+function isStoredNotificationConfigured(notification = {}) {
+  return Boolean(
+    notification?.reminderMinutesBeforeStart !== null &&
+      notification?.reminderMinutesBeforeStart !== undefined &&
+      (Boolean(notification?.desktopNotificationEnabled) ||
+        (Boolean(notification?.emailNotificationEnabled) &&
+          normalizeStoredNotificationRecipients(notification?.emailNotificationRecipients).length >
+            0))
+  );
+}
+
+function normalizeStoredNotifications(input = {}) {
+  const notifications = Array.isArray(input?.notifications) ? input.notifications : [];
+  const seenIds = new Set();
+  const normalizedNotifications = notifications.flatMap((notification) => {
+    const normalized = {
+      id: String(notification?.id || createId('notification')),
+      reminderMinutesBeforeStart:
+        notification?.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(notification?.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(notification?.emailNotificationEnabled),
+      emailNotificationRecipients: normalizeStoredNotificationRecipients(
+        notification?.emailNotificationRecipients
+      ),
+    };
+
+    if (seenIds.has(normalized.id)) {
+      return [];
+    }
+
+    seenIds.add(normalized.id);
+    return [normalized];
+  });
+
+  if (normalizedNotifications.length > 0) {
+    return normalizedNotifications;
+  }
+
+  const legacyNotification = {
+    id: createId('notification'),
+    reminderMinutesBeforeStart: input?.reminderMinutesBeforeStart ?? null,
+    desktopNotificationEnabled: Boolean(input?.desktopNotificationEnabled),
+    emailNotificationEnabled: Boolean(input?.emailNotificationEnabled),
+    emailNotificationRecipients: normalizeStoredNotificationRecipients(
+      input?.emailNotificationRecipients
+    ),
+  };
+
+  return isStoredNotificationConfigured(legacyNotification) ? [legacyNotification] : [];
+}
+
+function getPrimaryStoredNotification(input = {}) {
+  const notifications = normalizeStoredNotifications(input);
+  return notifications.find((notification) => isStoredNotificationConfigured(notification)) || null;
 }
 
 function migrateLegacyState(state = {}) {
@@ -397,11 +475,25 @@ class CalendarStore {
         approved_at TEXT,
         revoked_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS reminder_dispatch_log (
+        dispatch_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        recipient TEXT NOT NULL DEFAULT '',
+        reminder_at TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(event_id, channel, recipient, reminder_at)
+      );
     `);
   }
 
   bootstrap() {
-    this.ensureMeta('schemaVersion', '4');
+    const schemaVersion = Number(this.ensureMeta('schemaVersion', '4'));
+    if (!Number.isFinite(schemaVersion) || schemaVersion < 5) {
+      this.setMeta('schemaVersion', '5');
+    }
     this.ensureMeta('lastSequence', '0');
     this.ensureMeta('contentCipherVersion', String(CIPHER_VERSION));
 
@@ -641,6 +733,13 @@ class CalendarStore {
       title: event.title,
       description: event.description,
       groupName: event.groupName,
+      location: event.location || '',
+      people: event.people || [],
+      reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
+      emailNotificationRecipients: event.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(event),
       tags: event.tags || [],
       externalProviderLinks: event.externalProviderLinks || [],
     };
@@ -688,6 +787,11 @@ class CalendarStore {
 
     return {
       ...event,
+      reminderMinutesBeforeStart: nextContent.reminderMinutesBeforeStart,
+      desktopNotificationEnabled: nextContent.desktopNotificationEnabled,
+      emailNotificationEnabled: nextContent.emailNotificationEnabled,
+      emailNotificationRecipients: nextContent.emailNotificationRecipients,
+      notifications: nextContent.notifications,
       tags: nextContent.tags,
       updatedAt: timestamp,
       updatedBy: this.deviceId,
@@ -768,10 +872,23 @@ class CalendarStore {
   }
 
   buildEventContent(input) {
+    const notifications = normalizeStoredNotifications(input);
+    const primaryNotification = getPrimaryStoredNotification({
+      ...input,
+      notifications,
+    });
+
     return {
       title: input.title,
       description: input.description || '',
       groupName: input.groupName || '',
+      location: input.location || '',
+      people: Array.isArray(input.people) ? input.people : [],
+      reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
+      emailNotificationRecipients: primaryNotification?.emailNotificationRecipients || [],
+      notifications,
       tags: this.normalizeTags(input.tags || []),
       externalProviderLinks: input.externalProviderLinks || [],
     };
@@ -895,11 +1012,18 @@ class CalendarStore {
       id: row.id,
       title: content.title,
       description: content.description || '',
-      type: row.type,
+      type: normalizeEventType(row.type),
       completed: Boolean(row.completed),
       repeat: row.repeatRule,
       hasDeadline: Boolean(row.hasDeadline),
       groupName: content.groupName || '',
+      location: content.location || '',
+      people: content.people || [],
+      reminderMinutesBeforeStart: content.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(content.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(content.emailNotificationEnabled),
+      emailNotificationRecipients: content.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(content),
       startsAt: row.startsAt,
       endsAt: row.endsAt,
       color: row.color,
@@ -972,11 +1096,13 @@ class CalendarStore {
     return sanitizeEventCreateInput({
       title: holiday.name || holiday.localName || 'Public holiday',
       description: `${HOLIDAY_DESCRIPTION_MARKER} Imported default public holiday for ${countryCode}.`,
-      type: 'event',
+      type: 'personal',
       completed: false,
       repeat: 'none',
       hasDeadline: false,
       groupName: '',
+      location: '',
+      people: [],
       startsAt: new Date(`${holiday.date}T09:00:00`).toISOString(),
       endsAt: new Date(`${holiday.date}T09:30:00`).toISOString(),
       color: HOLIDAY_EVENT_COLOR,
@@ -1221,7 +1347,20 @@ class CalendarStore {
       }
     }
 
-    for (const field of ['title', 'description', 'groupName', 'tags', 'externalProviderLinks']) {
+    for (const field of [
+      'title',
+      'description',
+      'groupName',
+      'location',
+      'people',
+      'reminderMinutesBeforeStart',
+      'desktopNotificationEnabled',
+      'emailNotificationEnabled',
+      'emailNotificationRecipients',
+      'notifications',
+      'tags',
+      'externalProviderLinks',
+    ]) {
       if (patch[field] !== undefined) {
         contentPatch[field] = patch[field];
       }
@@ -1321,11 +1460,18 @@ class CalendarStore {
           id: envelope.entityId,
           title: contentPatch.title || '',
           description: contentPatch.description || '',
-          type: metadataPatch.type || 'event',
+          type: metadataPatch.type || 'meeting',
           completed: metadataPatch.completed ?? false,
           repeat: metadataPatch.repeat || 'none',
           hasDeadline: metadataPatch.hasDeadline ?? false,
           groupName: contentPatch.groupName || '',
+          location: contentPatch.location || '',
+          people: contentPatch.people || [],
+          reminderMinutesBeforeStart: contentPatch.reminderMinutesBeforeStart ?? null,
+          desktopNotificationEnabled: Boolean(contentPatch.desktopNotificationEnabled),
+          emailNotificationEnabled: Boolean(contentPatch.emailNotificationEnabled),
+          emailNotificationRecipients: contentPatch.emailNotificationRecipients || [],
+          notifications: contentPatch.notifications || [],
           startsAt: metadataPatch.startsAt,
           endsAt: metadataPatch.endsAt,
           color: metadataPatch.color || '#4f9d69',
@@ -1422,6 +1568,13 @@ class CalendarStore {
               title: sanitized.title,
               description: sanitized.description,
               groupName: sanitized.groupName,
+              location: sanitized.location,
+              people: sanitized.people || [],
+              reminderMinutesBeforeStart: sanitized.reminderMinutesBeforeStart ?? null,
+              desktopNotificationEnabled: Boolean(sanitized.desktopNotificationEnabled),
+              emailNotificationEnabled: Boolean(sanitized.emailNotificationEnabled),
+              emailNotificationRecipients: sanitized.emailNotificationRecipients || [],
+              notifications: sanitized.notifications || [],
               tags: content.tags,
               externalProviderLinks: sanitized.externalProviderLinks || [],
             },
@@ -1569,11 +1722,13 @@ class CalendarStore {
         const migratedInput = sanitizeEventCreateInput({
           title: event.title,
           description: event.description || '',
-          type: event.type || 'event',
+          type: event.type || 'meeting',
           completed: Boolean(event.completed),
           repeat: event.repeat || 'none',
           hasDeadline: Boolean(event.hasDeadline),
           groupName: event.groupName || '',
+          location: event.location || '',
+          people: event.people || [],
           startsAt: event.startsAt,
           endsAt: event.endsAt,
           color: event.color || '#4f9d69',
@@ -1703,6 +1858,13 @@ class CalendarStore {
       title: event.title,
       description: event.description,
       groupName: event.groupName,
+      location: event.location || '',
+      people: event.people || [],
+      reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
+      emailNotificationRecipients: event.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(event),
       tags: event.tags,
       externalProviderLinks: event.externalProviderLinks || [],
     };
@@ -1797,6 +1959,44 @@ class CalendarStore {
 
         if (nextContent.groupName !== currentContent.groupName) {
           changePatch.groupName = nextContent.groupName;
+        }
+
+        if (nextContent.location !== currentContent.location) {
+          changePatch.location = nextContent.location;
+        }
+
+        if (JSON.stringify(nextContent.people) !== JSON.stringify(currentContent.people)) {
+          changePatch.people = nextContent.people;
+        }
+
+        if (
+          nextContent.reminderMinutesBeforeStart !== currentContent.reminderMinutesBeforeStart
+        ) {
+          changePatch.reminderMinutesBeforeStart = nextContent.reminderMinutesBeforeStart;
+        }
+
+        if (
+          nextContent.desktopNotificationEnabled !== currentContent.desktopNotificationEnabled
+        ) {
+          changePatch.desktopNotificationEnabled = nextContent.desktopNotificationEnabled;
+        }
+
+        if (nextContent.emailNotificationEnabled !== currentContent.emailNotificationEnabled) {
+          changePatch.emailNotificationEnabled = nextContent.emailNotificationEnabled;
+        }
+
+        if (
+          JSON.stringify(nextContent.emailNotificationRecipients) !==
+          JSON.stringify(currentContent.emailNotificationRecipients)
+        ) {
+          changePatch.emailNotificationRecipients = nextContent.emailNotificationRecipients;
+        }
+
+        if (
+          JSON.stringify(nextContent.notifications) !==
+          JSON.stringify(currentContent.notifications)
+        ) {
+          changePatch.notifications = nextContent.notifications;
         }
 
         if (JSON.stringify(nextContent.tags) !== JSON.stringify(currentContent.tags)) {
@@ -2206,7 +2406,107 @@ class CalendarStore {
     return this.getSecuritySnapshot();
   }
 
+  listDueReminderEntries({ now = new Date(), gracePeriodMinutes = 5 } = {}) {
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const lowerBound = new Date(nowDate.getTime() - Number(gracePeriodMinutes || 5) * 60 * 1000);
+
+    return this.listEvents(false).flatMap((event) => {
+      const notifications = normalizeStoredNotifications(event);
+
+      return notifications.flatMap((notification) => {
+        const reminderMinutes = Number(notification.reminderMinutesBeforeStart);
+        if (!Number.isFinite(reminderMinutes) || reminderMinutes <= 0) {
+          return [];
+        }
+
+        if (
+          !notification.desktopNotificationEnabled &&
+          !notification.emailNotificationEnabled
+        ) {
+          return [];
+        }
+
+        const reminderAt = new Date(
+          new Date(event.startsAt).getTime() - reminderMinutes * 60 * 1000
+        );
+        if (
+          Number.isNaN(reminderAt.getTime()) ||
+          reminderAt > nowDate ||
+          reminderAt < lowerBound
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            ...event,
+            notificationId: notification.id,
+            reminderMinutesBeforeStart: notification.reminderMinutesBeforeStart,
+            desktopNotificationEnabled: Boolean(notification.desktopNotificationEnabled),
+            emailNotificationEnabled: Boolean(notification.emailNotificationEnabled),
+            emailNotificationRecipients: notification.emailNotificationRecipients || [],
+            reminderAt: reminderAt.toISOString(),
+          },
+        ];
+      });
+    });
+  }
+
+  hasReminderDispatch({ eventId, channel, recipient = '', reminderAt }) {
+    const row = this.db
+      .prepare(
+        `SELECT dispatch_id AS dispatchId
+         FROM reminder_dispatch_log
+         WHERE event_id = :eventId
+           AND channel = :channel
+           AND recipient = :recipient
+           AND reminder_at = :reminderAt
+         LIMIT 1`
+      )
+      .get({
+        eventId,
+        channel,
+        recipient,
+        reminderAt,
+      });
+
+    return Boolean(row?.dispatchId);
+  }
+
+  recordReminderDispatch({ eventId, channel, recipient = '', reminderAt, sentAt = nowIso() }) {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO reminder_dispatch_log (
+          dispatch_id,
+          event_id,
+          channel,
+          recipient,
+          reminder_at,
+          sent_at,
+          created_at
+        ) VALUES (
+          :dispatchId,
+          :eventId,
+          :channel,
+          :recipient,
+          :reminderAt,
+          :sentAt,
+          :createdAt
+        )`
+      )
+      .run({
+        dispatchId: createId('reminder_dispatch'),
+        eventId,
+        channel,
+        recipient,
+        reminderAt,
+        sentAt,
+        createdAt: sentAt,
+      });
+  }
+
   close() {
+    this.oauthService?.close?.();
     this.db.close();
   }
 

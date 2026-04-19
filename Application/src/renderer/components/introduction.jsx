@@ -69,6 +69,10 @@ export default function Introduction({
       typeof window !== 'undefined'
         ? window.localStorage.getItem('calendar-user-name') || ''
         : '',
+    notificationEmail:
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem('calendar-notification-email') || ''
+        : '',
   }));
 
   const filteredTimeZones = useMemo(
@@ -124,6 +128,7 @@ export default function Introduction({
       countryCode: window.localStorage.getItem('calendar-user-country') || detectedCountryCode,
       timeZone: window.localStorage.getItem('calendar-user-timezone') || detectedTimeZone,
       name: window.localStorage.getItem('calendar-user-name') || '',
+      notificationEmail: window.localStorage.getItem('calendar-notification-email') || '',
     });
     setStatusMessage('');
     setFieldMessage('');
@@ -168,6 +173,7 @@ export default function Introduction({
     const nextCountryCode = formData.countryCode;
     const nextTimeZone = formData.timeZone;
     const nextName = formData.name.trim();
+    const nextNotificationEmail = formData.notificationEmail.trim();
 
     setIsSaving(true);
     setStatusMessage('');
@@ -177,12 +183,14 @@ export default function Introduction({
         window.localStorage.setItem('calendar-user-country', nextCountryCode);
         window.localStorage.setItem('calendar-user-timezone', nextTimeZone);
         window.localStorage.setItem('calendar-user-name', nextName);
+        window.localStorage.setItem('calendar-notification-email', nextNotificationEmail);
       }
 
       const saveResult = await onSavePreferences?.({
         countryCode: nextCountryCode,
         timeZone: nextTimeZone,
         name: nextName,
+        notificationEmail: nextNotificationEmail,
       });
 
       if (saveResult?.warning) {
@@ -332,6 +340,24 @@ export default function Introduction({
             />
             <p className="text-sm leading-6 app-text-soft">
               Optional. This personalizes a few friendly parts of the app.
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <label htmlFor="notificationEmail" className="text-sm font-medium app-text-muted">
+              Notification email
+            </label>
+            <input
+              type="email"
+              id="notificationEmail"
+              name="notificationEmail"
+              value={formData.notificationEmail}
+              onChange={handleChange}
+              placeholder="Optional"
+              className="app-input rounded-xl px-4 py-3"
+            />
+            <p className="text-sm leading-6 app-text-soft">
+              Optional. Add one extra email that can receive calendar reminders later.
             </p>
           </div>
 
