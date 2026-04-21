@@ -1,6 +1,19 @@
+const path = require('node:path');
+
+const windowsIconPath = path.resolve(__dirname, 'assets', 'icon.ico');
+
 module.exports = {
   packagerConfig: {
     asar: true,
+    icon: path.resolve(__dirname, 'assets', 'icon'),
+    win32metadata: {
+      CompanyName: 'REDKING_11',
+      FileDescription: 'Calendar App',
+      InternalName: 'Calendar App',
+      OriginalFilename: 'Calendar App.exe',
+      ProductName: 'Calendar App',
+      LegalCopyright: 'Copyright (C) 2026 REDKING_11. All rights reserved.',
+    },
   },
   rebuildConfig: {},
   makers: [
@@ -11,6 +24,7 @@ module.exports = {
         language: 1033,
         manufacturer: 'REDKING_11',
         programFilesFolderName: 'RedFolder',
+        icon: windowsIconPath,
       },
     },
     {
