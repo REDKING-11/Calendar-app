@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ConnectedAccountsPanel from './ConnectedAccountsPanel';
 import HostedSyncPanel from './HostedSyncPanel';
 import {
   detectCountryCode,
@@ -94,6 +95,16 @@ export default function SettingsWindow({
   onExportHostedEnv,
   hostedBusyAction,
   hostedStatusMessage,
+  connectedAccounts = [],
+  providers = [],
+  oauthClientConfig = {},
+  onConnectProvider,
+  onSaveOAuthClientConfig,
+  onDisconnectAccount,
+  onRevokeAccount,
+  oauthBusyProvider = '',
+  accountBusyId = '',
+  oauthStatusMessage = '',
 }) {
   const detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const detectedCountryCode = detectCountryCode();
@@ -205,7 +216,7 @@ export default function SettingsWindow({
               />
             </label>
             <label className="settings-field">
-              <span>Notification email</span>
+              <span>Reminder recipient email</span>
               <input
                 type="email"
                 className="app-input"
@@ -215,6 +226,9 @@ export default function SettingsWindow({
                   updatePreference(setPreferences, { notificationEmail: event.target.value })
                 }
               />
+              <small className="settings-field-copy">
+                Optional. One extra recipient for reminders, not a sending account.
+              </small>
             </label>
             <label className="settings-field">
               <span>Country</span>
@@ -282,6 +296,25 @@ export default function SettingsWindow({
               </button>
             </div>
           </div>
+        </SettingsCard>
+
+        <SettingsCard
+          eyebrow="Accounts"
+          title="Connected calendar accounts"
+          description="Use Google and Outlook accounts for imports, reminders, and provider-backed event invites."
+        >
+          <ConnectedAccountsPanel
+            connectedAccounts={connectedAccounts}
+            providers={providers}
+            oauthClientConfig={oauthClientConfig}
+            onConnectProvider={onConnectProvider}
+            onSaveOAuthClientConfig={onSaveOAuthClientConfig}
+            onDisconnectAccount={onDisconnectAccount}
+            onRevokeAccount={onRevokeAccount}
+            oauthBusyProvider={oauthBusyProvider}
+            accountBusyId={accountBusyId}
+            oauthStatusMessage={oauthStatusMessage}
+          />
         </SettingsCard>
 
         <SettingsCard

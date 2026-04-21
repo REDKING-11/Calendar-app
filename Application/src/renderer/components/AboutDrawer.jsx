@@ -23,6 +23,128 @@ function StatCard({ label, value }) {
   );
 }
 
+const KEYBOARD_SHORTCUT_GROUPS = [
+  {
+    title: 'Main app regions',
+    items: [
+      {
+        keys: ['Tab'],
+        description: 'Move forward through buttons, inputs, calendar targets, and form controls.',
+      },
+      {
+        keys: ['Shift', 'Tab'],
+        description: 'Move backward through focusable controls.',
+      },
+      {
+        keys: ['Ctrl', '1'],
+        description: 'Focus the sidebar. Lands on Create first, then search as fallback.',
+      },
+      {
+        keys: ['Ctrl', '2'],
+        description: 'Focus the header/calendar controls.',
+      },
+      {
+        keys: ['Ctrl', '3'],
+        description: 'Focus the active calendar view.',
+      },
+    ],
+  },
+  {
+    title: 'Calendar movement',
+    items: [
+      {
+        keys: ['Arrow keys'],
+        description: 'Move through Month dates, Week days/time slots, Day time slots, or Year months.',
+      },
+      {
+        keys: ['Home'],
+        description: 'Move to the first item in the current calendar row.',
+      },
+      {
+        keys: ['End'],
+        description: 'Move to the last item in the current calendar row.',
+      },
+      {
+        keys: ['Ctrl', 'Mouse wheel'],
+        description: 'Zoom the Day timeline around the hovered time.',
+      },
+    ],
+  },
+  {
+    title: 'Create and edit',
+    items: [
+      {
+        keys: ['Enter'],
+        description: 'Open quick create on a focused slot/date, quick edit on an event, or open a Year month.',
+      },
+      {
+        keys: ['Space'],
+        description: 'Open quick create/edit from focused slots and events where supported.',
+      },
+      {
+        keys: ['Ctrl', 'Enter'],
+        description: 'Open the full editor from a focused calendar slot, date, or event.',
+      },
+      {
+        keys: ['Shift', 'Enter'],
+        description: 'Also opens the full editor from focused calendar slots, dates, or events.',
+      },
+    ],
+  },
+  {
+    title: 'Closing and field editing',
+    items: [
+      {
+        keys: ['Escape'],
+        description: 'Close quick composer, full editor, sidebar pickers/menus, OAuth tutorial, or revert an active date/time edit.',
+      },
+      {
+        keys: ['Enter'],
+        description: 'Commit focused quick date/time text fields.',
+      },
+      {
+        keys: ['Arrow Up'],
+        description: 'Increase focused time text fields by 15 minutes.',
+      },
+      {
+        keys: ['Arrow Down'],
+        description: 'Decrease focused time text fields by 15 minutes.',
+      },
+    ],
+  },
+];
+
+function KeyChip({ children }) {
+  return <kbd className="keyboard-shortcut-key">{children}</kbd>;
+}
+
+function KeyboardShortcutList() {
+  return (
+    <div className="keyboard-shortcut-groups">
+      {KEYBOARD_SHORTCUT_GROUPS.map((group) => (
+        <section key={group.title} className="keyboard-shortcut-group">
+          <h4 className="keyboard-shortcut-group-title">{group.title}</h4>
+          <div className="keyboard-shortcut-list">
+            {group.items.map((item) => (
+              <div key={`${group.title}-${item.keys.join('-')}`} className="keyboard-shortcut-row">
+                <div className="keyboard-shortcut-keys" aria-label={item.keys.join(' plus ')}>
+                  {item.keys.map((key, index) => (
+                    <React.Fragment key={`${key}-${index}`}>
+                      {index > 0 ? <span className="keyboard-shortcut-plus">+</span> : null}
+                      <KeyChip>{key}</KeyChip>
+                    </React.Fragment>
+                  ))}
+                </div>
+                <p>{item.description}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export default function AboutDrawer({
   isOpen,
   onClose,
@@ -76,6 +198,15 @@ export default function AboutDrawer({
                 value={security?.hosted?.connectionStatus || 'disconnected'}
               />
             </div>
+          </section>
+
+          <section className="settings-card">
+            <p className="settings-section-eyebrow">Keyboard</p>
+            <h3 className="settings-card-title">Keyboard shortcuts</h3>
+            <p className="settings-card-copy">
+              The app ignores global shortcuts while you are typing in normal text fields.
+            </p>
+            <KeyboardShortcutList />
           </section>
 
           <section className="settings-card">

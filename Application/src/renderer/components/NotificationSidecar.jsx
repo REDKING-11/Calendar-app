@@ -10,6 +10,7 @@ export default function NotificationSidecar({
   connectedAccounts,
   providers,
   onConnectProvider,
+  onOpenConnectionSettings,
   oauthBusyProvider,
   oauthStatusMessage,
 }) {
@@ -29,6 +30,7 @@ export default function NotificationSidecar({
         connectedAccounts={connectedAccounts}
         providers={providers}
         onConnectProvider={onConnectProvider}
+        onOpenConnectionSettings={onOpenConnectionSettings}
         oauthBusyProvider={oauthBusyProvider}
         oauthStatusMessage={oauthStatusMessage}
         compact

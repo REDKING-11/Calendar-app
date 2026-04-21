@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { isEventOnDate } from '../calendar-helpers';
+import { isEventOnDate, isSameDay } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
 import { createClickIntentRouter } from '../../clickIntent';
+import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
 const ZOOM_LEVELS = [
   {
@@ -143,7 +144,14 @@ function getAnchorFromElement(element) {
   };
 }
 
+function focusDaySlot(sourceElement, slotIndex) {
+  const calendarElement = sourceElement.closest('[data-calendar-grid="day"]');
+  const nextElement = calendarElement?.querySelector(`[data-day-slot-index="${slotIndex}"]`);
+  window.requestAnimationFrame(() => nextElement?.focus({ preventScroll: true }));
+}
+
 export default function DayView({
+  headerRef,
   events,
   preferences,
   selectedDate,
@@ -198,6 +206,18 @@ export default function DayView({
         }))
         .filter((item) => item.layout),
     [dayEvents, windowState.startMinutes, windowState.endMinutes, zoomConfig.pixelsPerHour]
+  );
+  const currentMinutes = (() => {
+    const now = new Date();
+    if (!isSameDay(selectedDate, now)) {
+      return windowState.startMinutes;
+    }
+
+    return now.getHours() * 60 + now.getMinutes();
+  })();
+  const activeSlotIndex = Math.max(
+    0,
+    slots.findIndex((slot) => slot.minutes >= currentMinutes)
   );
 
   slotHandlersRef.current.onSingle = ({ date, anchorPoint }) => {
@@ -292,6 +312,37 @@ export default function DayView({
     onSelectDate?.(new Date());
   };
 
+  const openSlotFromKeyboard = (keyboardEvent, slot, openInDrawer = false) => {
+    const payload = {
+      date: slot.slotDate,
+      anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
+    };
+
+    if (openInDrawer) {
+      slotHandlersRef.current.onDouble(payload);
+    } else {
+      slotHandlersRef.current.onSingle(payload);
+    }
+  };
+
+  const handleEventKeyboardOpen = (keyboardEvent, event) => {
+    if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') {
+      return;
+    }
+
+    keyboardEvent.preventDefault();
+    const payload = {
+      event,
+      anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
+    };
+
+    if (keyboardEvent.ctrlKey || keyboardEvent.shiftKey) {
+      eventHandlersRef.current.onDouble(payload);
+    } else {
+      eventHandlersRef.current.onSingle(payload);
+    }
+  };
+
   useEffect(() => {
     return () => {
       slotClickRouterRef.current?.cancelPending();
@@ -302,6 +353,7 @@ export default function DayView({
   return (
     <section className="calendar-card relative flex h-full min-h-0 flex-col overflow-hidden">
       <CalendarViewHeader
+        headerRef={headerRef}
         eyebrow="Day view"
         title={dayTitle}
         titleTone="hero"
@@ -326,6 +378,7 @@ export default function DayView({
         className="day-timeline min-h-0 flex-1"
         onWheel={handleTimelineWheel}
         title="Hold Ctrl and scroll to zoom around the hovered time"
+        data-calendar-grid="day"
       >
         <div className="day-timeline-body">
           <div className="day-time-column" style={{ height: `${timelineHeight}px` }}>
@@ -344,7 +397,7 @@ export default function DayView({
                 gridTemplateRows: `repeat(${slots.length}, ${slotHeight}px)`,
               }}
             >
-              {slots.map((slot) => (
+              {slots.map((slot, slotIndex) => (
                 <button
                   key={slot.key}
                   type="button"
@@ -354,6 +407,8 @@ export default function DayView({
                   ]
                     .filter(Boolean)
                     .join(' ')}
+                  data-day-slot-index={slotIndex}
+                  data-calendar-focus={slotIndex === activeSlotIndex ? 'active' : slotIndex === 0 ? 'first' : undefined}
                   onClick={(event) => {
                     slotClickRouterRef.current.handleSingle({
                       date: slot.slotDate,
@@ -365,6 +420,29 @@ export default function DayView({
                       date: slot.slotDate,
                     });
                   }}
+                  onKeyDown={(keyboardEvent) => {
+                    if (isGridNavigationKey(keyboardEvent.key)) {
+                      keyboardEvent.preventDefault();
+                      const nextIndex = getGridNavigationIndex({
+                        currentIndex: slotIndex,
+                        itemCount: slots.length,
+                        columnCount: 1,
+                        key: keyboardEvent.key,
+                      });
+                      focusDaySlot(keyboardEvent.currentTarget, nextIndex);
+                      return;
+                    }
+
+                    if (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') {
+                      keyboardEvent.preventDefault();
+                      openSlotFromKeyboard(
+                        keyboardEvent,
+                        slot,
+                        keyboardEvent.ctrlKey || keyboardEvent.shiftKey
+                      );
+                    }
+                  }}
+                  aria-label={`Add an event at ${formatMinutesLabel(slot.minutes)}`}
                   title={`Add an event at ${formatMinutesLabel(slot.minutes)}`}
                 />
               ))}
@@ -372,8 +450,9 @@ export default function DayView({
 
             <div className="day-event-layer">
               {visibleDayEvents.map(({ event, layout }) => (
-                <article
+                <button
                   key={event.id}
+                  type="button"
                   className={`day-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
                   style={{
                     top: `${layout.top}px`,
@@ -391,11 +470,12 @@ export default function DayView({
                       event,
                     })
                   }
+                  onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
                 >
                   <p className="calendar-event-card-title">{event.title}</p>
                   <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
                   <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
-                </article>
+                </button>
               ))}
             </div>
           </div>
@@ -470,6 +550,7 @@ export default function DayView({
                       event,
                     })
                   }
+                  onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
                 >
                   <p className="day-detail-time">{getEventTimeLabel(event, preferences)}</p>
                   <div>

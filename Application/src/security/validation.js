@@ -26,6 +26,9 @@ const VISIBILITY_ALIASES = {
   internal: 'private',
   external: 'busy_only',
 };
+const INVITE_PROVIDERS = new Set(['', 'google', 'microsoft']);
+const INVITE_DELIVERY_MODES = new Set(['local_only', 'provider_invite']);
+const IANA_TIME_ZONE_PATTERN = /^[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)+$/;
 
 function sanitizeInlineText(value, maxLength = 160) {
   return String(value ?? '')
@@ -58,6 +61,15 @@ function sanitizeIsoDate(value, fieldName) {
 
 function sanitizeBoolean(value) {
   return Boolean(value);
+}
+
+function sanitizeOptionalTimeZone(value) {
+  const candidate = sanitizeInlineText(value, 120);
+  if (!candidate) {
+    return '';
+  }
+
+  return IANA_TIME_ZONE_PATTERN.test(candidate) ? candidate : '';
 }
 
 function mapEventTypeValue(value) {
@@ -121,9 +133,22 @@ function normalizeExternalProviderLinks(links = []) {
         provider,
         externalEventId,
         url,
+        mode: sanitizeInlineText(link?.mode, 32).toLowerCase(),
+        accountId: sanitizeInlineText(link?.accountId, 120),
+        remoteCalendarId: sanitizeInlineText(link?.remoteCalendarId, 240),
       },
     ];
   });
+}
+
+function sanitizeInviteProvider(value) {
+  const candidate = sanitizeInlineText(value, 32).toLowerCase();
+  return INVITE_PROVIDERS.has(candidate) ? candidate : '';
+}
+
+function sanitizeInviteDeliveryMode(value) {
+  const candidate = sanitizeInlineText(value || 'local_only', 40).toLowerCase();
+  return INVITE_DELIVERY_MODES.has(candidate) ? candidate : 'local_only';
 }
 
 function normalizeTags(tags = []) {
@@ -176,6 +201,33 @@ function normalizePeople(people = []) {
 
     seen.add(key);
     return [value];
+  });
+}
+
+function normalizeInviteRecipients(recipients = []) {
+  const rawRecipients = Array.isArray(recipients)
+    ? recipients
+    : String(recipients ?? '')
+        .split(/[\n,;]+/g)
+        .map((recipient) => recipient.trim());
+  const seen = new Set();
+
+  return rawRecipients.slice(0, 50).flatMap((recipient) => {
+    const normalized = sanitizeInlineText(recipient, 160).toLowerCase();
+    if (!normalized) {
+      return [];
+    }
+
+    if (!EMAIL_PATTERN.test(normalized)) {
+      throw new Error('Invite recipients must be valid email addresses.');
+    }
+
+    if (seen.has(normalized)) {
+      return [];
+    }
+
+    seen.add(normalized);
+    return [normalized];
   });
 }
 
@@ -338,8 +390,11 @@ function sanitizeEventCreateInput(input = {}) {
     groupName: sanitizeInlineText(input.groupName, 120),
     location: sanitizeInlineText(input.location, 160),
     people: normalizePeople(input.people),
+    inviteRecipients: normalizeInviteRecipients(input.inviteRecipients),
     startsAt,
     endsAt,
+    isAllDay: sanitizeBoolean(input.isAllDay),
+    sourceTimeZone: sanitizeOptionalTimeZone(input.sourceTimeZone),
     reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
     desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
     emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
@@ -349,6 +404,11 @@ function sanitizeEventCreateInput(input = {}) {
     tags: normalizeTags(input.tags),
     syncPolicy: sanitizeSyncPolicy(input.syncPolicy),
     visibility: sanitizeVisibility(input.visibility),
+    inviteTargetAccountId: sanitizeInlineText(input.inviteTargetAccountId, 120),
+    inviteTargetProvider: sanitizeInviteProvider(input.inviteTargetProvider),
+    inviteTargetCalendarId: sanitizeInlineText(input.inviteTargetCalendarId, 240),
+    inviteDeliveryMode: sanitizeInviteDeliveryMode(input.inviteDeliveryMode),
+    lastInviteError: sanitizeInlineText(input.lastInviteError, 500),
     externalProviderLinks: normalizeExternalProviderLinks(input.externalProviderLinks),
   };
 }
@@ -401,6 +461,10 @@ function sanitizeEventUpdateInput(input = {}) {
     sanitized.people = normalizePeople(input.people);
   }
 
+  if (input.inviteRecipients !== undefined) {
+    sanitized.inviteRecipients = normalizeInviteRecipients(input.inviteRecipients);
+  }
+
   if (input.startsAt !== undefined) {
     sanitized.startsAt = sanitizeIsoDate(input.startsAt, 'startsAt');
   }
@@ -417,6 +481,14 @@ function sanitizeEventUpdateInput(input = {}) {
 
   if (input.color !== undefined) {
     sanitized.color = sanitizeColor(input.color);
+  }
+
+  if (input.isAllDay !== undefined) {
+    sanitized.isAllDay = sanitizeBoolean(input.isAllDay);
+  }
+
+  if (input.sourceTimeZone !== undefined) {
+    sanitized.sourceTimeZone = sanitizeOptionalTimeZone(input.sourceTimeZone);
   }
 
   if (input.reminderMinutesBeforeStart !== undefined) {
@@ -467,6 +539,26 @@ function sanitizeEventUpdateInput(input = {}) {
 
   if (input.visibility !== undefined) {
     sanitized.visibility = sanitizeVisibility(input.visibility);
+  }
+
+  if (input.inviteTargetAccountId !== undefined) {
+    sanitized.inviteTargetAccountId = sanitizeInlineText(input.inviteTargetAccountId, 120);
+  }
+
+  if (input.inviteTargetProvider !== undefined) {
+    sanitized.inviteTargetProvider = sanitizeInviteProvider(input.inviteTargetProvider);
+  }
+
+  if (input.inviteTargetCalendarId !== undefined) {
+    sanitized.inviteTargetCalendarId = sanitizeInlineText(input.inviteTargetCalendarId, 240);
+  }
+
+  if (input.inviteDeliveryMode !== undefined) {
+    sanitized.inviteDeliveryMode = sanitizeInviteDeliveryMode(input.inviteDeliveryMode);
+  }
+
+  if (input.lastInviteError !== undefined) {
+    sanitized.lastInviteError = sanitizeInlineText(input.lastInviteError, 500);
   }
 
   if (input.externalProviderLinks !== undefined) {

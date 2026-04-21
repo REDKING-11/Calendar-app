@@ -1,6 +1,7 @@
 import React from 'react';
 
 export default function Header({
+  regionRef,
   eventCount,
   onToggleUpcoming,
   onOpenAbout,
@@ -8,7 +9,7 @@ export default function Header({
   timeZone,
 }) {
   return (
-    <section className="flex w-full min-w-0 flex-col gap-3">
+    <section ref={regionRef} className="flex w-full min-w-0 flex-col gap-3" aria-label="Header controls">
       <div className="app-toolbar flex w-full flex-wrap items-center justify-between gap-3 rounded-3xl px-5 py-4">
         <div>
           <p className="eyebrow">Workspace</p>
@@ -22,6 +23,7 @@ export default function Header({
           <button
             type="button"
             onClick={onToggleUpcoming}
+            data-keyboard-focus="app-header-primary"
             className="app-button app-button--secondary"
           >
             Upcoming

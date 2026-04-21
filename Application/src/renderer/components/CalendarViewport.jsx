@@ -5,6 +5,8 @@ import WeekView from './Views/WeekView';
 import YearView from './Views/YearView';
 
 export default function CalendarViewport({
+  regionRef,
+  headerRef,
   calendarView,
   events,
   preferences,
@@ -16,10 +18,18 @@ export default function CalendarViewport({
   onChangeView,
   onSelectMonth,
 }) {
+  const viewLabel = `${calendarView[0].toUpperCase()}${calendarView.slice(1)} calendar`;
+
   return (
-    <div className="h-full min-h-0 min-w-0 overflow-hidden">
+    <div
+      ref={regionRef}
+      className="h-full min-h-0 min-w-0 overflow-hidden"
+      role="region"
+      aria-label={viewLabel}
+    >
       {calendarView === 'day' ? (
         <DayView
+          headerRef={headerRef}
           events={events}
           preferences={preferences}
           selectedDate={selectedDate}
@@ -32,6 +42,7 @@ export default function CalendarViewport({
       ) : null}
       {calendarView === 'month' ? (
         <MonthView
+          headerRef={headerRef}
           events={events}
           preferences={preferences}
           timeZone={timeZone}
@@ -45,6 +56,7 @@ export default function CalendarViewport({
       ) : null}
       {calendarView === 'week' ? (
         <WeekView
+          headerRef={headerRef}
           events={events}
           preferences={preferences}
           timeZone={timeZone}
@@ -58,6 +70,7 @@ export default function CalendarViewport({
       ) : null}
       {calendarView === 'year' ? (
         <YearView
+          headerRef={headerRef}
           events={events}
           preferences={preferences}
           timeZone={timeZone}

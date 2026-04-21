@@ -14,9 +14,13 @@ export default function EventComposerDrawer({
   knownNotificationEmails,
   connectedAccounts,
   providers,
+  externalCalendarsByAccount,
+  onLoadExternalCalendars,
   onConnectProvider,
+  onOpenConnectionSettings,
   oauthBusyProvider,
   oauthStatusMessage,
+  composerStatusMessage,
   onDelete,
   onSubmit,
 }) {
@@ -43,15 +47,15 @@ export default function EventComposerDrawer({
       aria-modal="true"
       aria-labelledby="event-composer-dialog-title"
     >
-      <section className="app-drawer-panel event-drawer-panel">
-        <div className="event-composer-top event-composer-modal-header">
+      <section className="app-drawer-panel event-drawer-panel pointer-events-none flex h-[min(960px,calc(100vh-48px))] max-h-[calc(100vh-48px)] w-[min(1520px,calc(100vw-48px))] flex-col overflow-hidden rounded-[32px] p-0 max-[900px]:h-[calc(100vh-24px)] max-[900px]:max-h-[calc(100vh-24px)] max-[900px]:w-[calc(100vw-24px)] max-[900px]:rounded-[26px]">
+        <div className="flex shrink-0 items-start justify-between gap-4 px-7 pt-6 max-[900px]:gap-3 max-[900px]:px-5 max-[900px]:pt-5">
           <div>
             <p className="settings-section-eyebrow">
               {mode === 'edit' ? 'Full details' : 'Create event'}
             </p>
             <h2
               id="event-composer-dialog-title"
-              className="event-composer-modal-title"
+              className="m-0 text-[clamp(1.85rem,2vw,2.3rem)] font-bold leading-[1.04] tracking-[-0.03em] text-[var(--text-primary)] max-[900px]:text-[clamp(1.55rem,5vw,1.95rem)]"
             >
               {mode === 'edit' ? 'Edit event details' : 'Create event from sidebar'}
             </h2>
@@ -65,8 +69,11 @@ export default function EventComposerDrawer({
           </button>
         </div>
 
-        <form className="event-composer-layout event-composer-layout--modal" onSubmit={onSubmit}>
-          <div className="event-composer-scroll event-composer-scroll--modal">
+        <form
+          className="flex min-h-0 flex-1 flex-col px-7 pb-6 pt-[18px] max-[900px]:px-5 max-[900px]:pb-5 max-[900px]:pt-4"
+          onSubmit={onSubmit}
+        >
+          <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto pb-2 pr-2.5">
             <EventComposerFields
               draftEvent={draftEvent}
               onFieldChange={onFieldChange}
@@ -79,36 +86,44 @@ export default function EventComposerDrawer({
               knownNotificationEmails={knownNotificationEmails}
               connectedAccounts={connectedAccounts}
               providers={providers}
+              externalCalendarsByAccount={externalCalendarsByAccount}
+              onLoadExternalCalendars={onLoadExternalCalendars}
               onConnectProvider={onConnectProvider}
+              onOpenConnectionSettings={onOpenConnectionSettings}
               oauthBusyProvider={oauthBusyProvider}
               oauthStatusMessage={oauthStatusMessage}
             />
+            {composerStatusMessage ? (
+              <p className="settings-inline-warning event-composer-status">
+                {composerStatusMessage}
+              </p>
+            ) : null}
           </div>
 
-          <div className="event-composer-footer event-composer-footer--modal">
-            <div className="event-composer-footer-row">
+          <div className="static mt-[18px] shrink-0 border-t border-[var(--border-color)] bg-[linear-gradient(180deg,transparent,var(--surface-overlay)_35%,transparent_100%)] px-0 pb-0 pt-4 backdrop-blur-none">
+            <div className="flex items-center justify-between gap-2.5 max-[900px]:flex-col max-[900px]:items-stretch">
               <div>
                 {mode === 'edit' ? (
                   <button
                     type="button"
                     onClick={onDelete}
-                    className="app-button app-danger-button"
+                    className="app-button app-danger-button max-[900px]:flex-1 max-[900px]:basis-[180px]"
                   >
                     Delete
                   </button>
                 ) : null}
               </div>
-              <div className="event-composer-footer-actions">
+              <div className="flex justify-end gap-2.5 max-[900px]:w-full max-[900px]:flex-wrap max-[900px]:justify-stretch">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="app-button app-button--secondary"
+                  className="app-button app-button--secondary max-[900px]:flex-1 max-[900px]:basis-[180px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="app-button app-button--primary"
+                  className="app-button app-button--primary max-[900px]:flex-1 max-[900px]:basis-[180px]"
                 >
                   {mode === 'edit' ? 'Save changes' : 'Create event'}
                 </button>

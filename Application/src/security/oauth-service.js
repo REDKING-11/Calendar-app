@@ -4,6 +4,24 @@ const http = require('node:http');
 const GOOGLE_GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const MICROSOFT_MAIL_SEND_SCOPE = 'Mail.Send';
 const TOKEN_REFRESH_SKEW_MS = 60 * 1000;
+const OAUTH_PROVIDER_SETUP = {
+  google: {
+    label: 'Google',
+    clientIdEnv: 'CALENDAR_GOOGLE_CLIENT_ID',
+    redirectUriEnv: 'CALENDAR_GOOGLE_REDIRECT_URI',
+    clientIdMetaKey: 'oauth.google.clientId',
+    redirectUriMetaKey: 'oauth.google.redirectUri',
+    defaultRedirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
+  },
+  microsoft: {
+    label: 'Outlook',
+    clientIdEnv: 'CALENDAR_MICROSOFT_CLIENT_ID',
+    redirectUriEnv: 'CALENDAR_MICROSOFT_REDIRECT_URI',
+    clientIdMetaKey: 'oauth.microsoft.clientId',
+    redirectUriMetaKey: 'oauth.microsoft.redirectUri',
+    defaultRedirectUri: 'http://127.0.0.1:45782/oauth/microsoft/callback',
+  },
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,6 +55,40 @@ function hasMailSendScope(provider, scopeSet = '') {
   return parseScopeSet(scopeSet).includes(requiredScope);
 }
 
+function sanitizeOAuthClientId(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate) {
+    return '';
+  }
+
+  if (candidate.length > 500 || /[\s\u0000-\u001f\u007f]/.test(candidate)) {
+    throw new Error('OAuth client ID must be a single line without spaces.');
+  }
+
+  return candidate;
+}
+
+function sanitizeOAuthRedirectUri(value, provider) {
+  const setup = OAUTH_PROVIDER_SETUP[provider];
+  const candidate = String(value || '').trim() || setup?.defaultRedirectUri || '';
+
+  try {
+    const parsed = new URL(candidate);
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      parsed.protocol !== 'http:' ||
+      !['127.0.0.1', 'localhost'].includes(hostname) ||
+      !parsed.port
+    ) {
+      throw new Error('Redirect URI must use localhost with an explicit port.');
+    }
+
+    return parsed.toString();
+  } catch (_error) {
+    throw new Error('OAuth redirect URI must be a localhost HTTP URL with a port.');
+  }
+}
+
 function decodeJwtPayload(token) {
   if (!token || typeof token !== 'string') {
     return null;
@@ -54,6 +106,348 @@ function decodeJwtPayload(token) {
   }
 }
 
+function normalizeCalendarColor(color, fallback = '#4f9d69') {
+  const candidate = String(color || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(candidate) ? candidate.toLowerCase() : fallback;
+}
+
+function buildRepeatFromRrule(recurrence = []) {
+  const ruleLine = (Array.isArray(recurrence) ? recurrence : [recurrence]).find((entry) =>
+    String(entry || '').trim().toUpperCase().startsWith('RRULE:')
+  );
+  if (!ruleLine) {
+    return 'none';
+  }
+
+  const match = String(ruleLine)
+    .trim()
+    .toUpperCase()
+    .match(/FREQ=([A-Z]+)/);
+  switch (match?.[1]) {
+    case 'DAILY':
+      return 'daily';
+    case 'WEEKLY':
+      return 'weekly';
+    case 'MONTHLY':
+      return 'monthly';
+    default:
+      return 'none';
+  }
+}
+
+function buildRepeatFromMicrosoftPattern(pattern = {}) {
+  switch (String(pattern?.type || '').trim().toLowerCase()) {
+    case 'daily':
+      return 'daily';
+    case 'weekly':
+      return 'weekly';
+    case 'absolutemonthly':
+    case 'relativemonthly':
+      return 'monthly';
+    default:
+      return 'none';
+  }
+}
+
+function formatDateOnly(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  return Number.isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
+}
+
+function stripMilliseconds(isoValue) {
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) {
+    return String(isoValue || '');
+  }
+
+  return date.toISOString().replace(/\.\d{3}Z$/, '');
+}
+
+function buildGoogleRecurrence(repeat) {
+  switch (String(repeat || 'none').trim().toLowerCase()) {
+    case 'daily':
+      return ['RRULE:FREQ=DAILY'];
+    case 'weekly':
+      return ['RRULE:FREQ=WEEKLY'];
+    case 'monthly':
+      return ['RRULE:FREQ=MONTHLY'];
+    default:
+      return undefined;
+  }
+}
+
+function buildMicrosoftRecurrence(repeat, startsAt) {
+  const startDate = formatDateOnly(startsAt);
+  if (!startDate) {
+    return undefined;
+  }
+
+  const normalized = String(repeat || 'none').trim().toLowerCase();
+  if (normalized === 'daily') {
+    return {
+      pattern: { type: 'daily', interval: 1 },
+      range: { type: 'noEnd', startDate },
+    };
+  }
+
+  if (normalized === 'weekly') {
+    const weekday = new Date(startsAt)
+      .toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
+      .toLowerCase();
+    return {
+      pattern: { type: 'weekly', interval: 1, daysOfWeek: [weekday] },
+      range: { type: 'noEnd', startDate },
+    };
+  }
+
+  if (normalized === 'monthly') {
+    return {
+      pattern: { type: 'absoluteMonthly', interval: 1, dayOfMonth: new Date(startsAt).getUTCDate() },
+      range: { type: 'noEnd', startDate },
+    };
+  }
+
+  return undefined;
+}
+
+function buildGoogleCalendarEventPayload(event = {}, attendees = []) {
+  const payload = {
+    summary: event.title || 'Untitled event',
+    description: event.description || '',
+    location: event.location || '',
+    attendees: attendees.map((email) => ({ email })),
+  };
+
+  if (event.isAllDay) {
+    payload.start = { date: formatDateOnly(event.startsAt) };
+    payload.end = { date: formatDateOnly(event.endsAt) };
+  } else {
+    payload.start = {
+      dateTime: new Date(event.startsAt).toISOString(),
+      timeZone: event.sourceTimeZone || 'UTC',
+    };
+    payload.end = {
+      dateTime: new Date(event.endsAt).toISOString(),
+      timeZone: event.sourceTimeZone || 'UTC',
+    };
+  }
+
+  const recurrence = buildGoogleRecurrence(event.repeat);
+  if (recurrence) {
+    payload.recurrence = recurrence;
+  }
+
+  return payload;
+}
+
+function buildMicrosoftCalendarEventPayload(event = {}, attendees = []) {
+  const payload = {
+    subject: event.title || 'Untitled event',
+    body: {
+      contentType: 'Text',
+      content: event.description || '',
+    },
+    location: event.location ? { displayName: event.location } : undefined,
+    isAllDay: Boolean(event.isAllDay),
+    start: {
+      dateTime: event.isAllDay ? `${formatDateOnly(event.startsAt)}T00:00:00` : stripMilliseconds(event.startsAt),
+      timeZone: event.sourceTimeZone || 'UTC',
+    },
+    end: {
+      dateTime: event.isAllDay ? `${formatDateOnly(event.endsAt)}T00:00:00` : stripMilliseconds(event.endsAt),
+      timeZone: event.sourceTimeZone || 'UTC',
+    },
+    attendees: attendees.map((email) => ({
+      emailAddress: { address: email },
+      type: 'required',
+    })),
+  };
+
+  const recurrence = buildMicrosoftRecurrence(event.repeat, event.startsAt);
+  if (recurrence) {
+    payload.recurrence = recurrence;
+  }
+
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined)
+  );
+}
+
+function buildGoogleDateTime(entry = {}, fallbackMinutes = 60) {
+  if (entry?.date) {
+    const startsAt = new Date(`${entry.date}T00:00:00.000Z`);
+    const endsAt = new Date(startsAt);
+    endsAt.setUTCMinutes(endsAt.getUTCMinutes() + fallbackMinutes);
+    return {
+      date: startsAt,
+      fallbackDate: endsAt,
+      isAllDay: true,
+      sourceTimeZone: String(entry?.timeZone || ''),
+    };
+  }
+
+  const date = new Date(entry?.dateTime || '');
+  const fallbackDate = new Date(date);
+  fallbackDate.setUTCMinutes(fallbackDate.getUTCMinutes() + fallbackMinutes);
+  return {
+    date,
+    fallbackDate,
+    isAllDay: false,
+    sourceTimeZone: String(entry?.timeZone || ''),
+  };
+}
+
+function buildMicrosoftDateTime(entry = {}, fallbackMinutes = 60) {
+  const rawDateTime = String(entry?.dateTime || '').trim();
+  const date = rawDateTime.endsWith('Z') ? new Date(rawDateTime) : new Date(rawDateTime);
+  const fallbackDate = new Date(date);
+  fallbackDate.setUTCMinutes(fallbackDate.getUTCMinutes() + fallbackMinutes);
+  return {
+    date,
+    fallbackDate,
+    isAllDay: false,
+    sourceTimeZone: String(entry?.timeZone || ''),
+  };
+}
+
+function mapGoogleCalendarItem(accountId, item = {}) {
+  return {
+    accountId,
+    provider: 'google',
+    remoteCalendarId: String(item.id || ''),
+    displayName: String(item.summary || item.id || 'Google Calendar').trim(),
+    selected: Boolean(item.selected ?? true),
+    color: normalizeCalendarColor(item.backgroundColor, '#4f9d69'),
+    timeZone: String(item.timeZone || ''),
+    primary: Boolean(item.primary),
+    accessRole: String(item.accessRole || ''),
+  };
+}
+
+function mapGoogleEventItem(item = {}, calendar = {}) {
+  const startInfo = buildGoogleDateTime(item.start || {}, 24 * 60);
+  const endInfo = buildGoogleDateTime(item.end || {}, startInfo.isAllDay ? 24 * 60 : 60);
+  const startsAt = startInfo.date;
+  const endsAt = endInfo.date;
+
+  if (Number.isNaN(startsAt.getTime())) {
+    return null;
+  }
+
+  const effectiveEndsAt =
+    Number.isNaN(endsAt.getTime()) || endsAt <= startsAt ? endInfo.fallbackDate : endsAt;
+
+  return {
+    provider: 'google',
+    remoteCalendarId: String(calendar.remoteCalendarId || calendar.id || ''),
+    remoteEventId: String(item.id || ''),
+    remoteVersion: String(item.etag || item.updated || item.sequence || ''),
+    remoteDeleted: String(item.status || '').trim().toLowerCase() === 'cancelled',
+    title: String(item.summary || 'Imported event').trim() || 'Imported event',
+    description: String(item.description || ''),
+    location: String(item.location || ''),
+    people: Array.isArray(item.attendees)
+      ? item.attendees
+          .map((attendee) => attendee?.email || attendee?.displayName || '')
+          .filter(Boolean)
+      : [],
+    type: 'meeting',
+    completed: false,
+    repeat: buildRepeatFromRrule(item.recurrence),
+    hasDeadline: false,
+    groupName: '',
+    startsAt: startsAt.toISOString(),
+    endsAt: effectiveEndsAt.toISOString(),
+    isAllDay: Boolean(startInfo.isAllDay),
+    sourceTimeZone: startInfo.sourceTimeZone || endInfo.sourceTimeZone || calendar.timeZone || '',
+    reminderMinutesBeforeStart: null,
+    desktopNotificationEnabled: false,
+    emailNotificationEnabled: false,
+    emailNotificationRecipients: [],
+    notifications: [],
+    color: normalizeCalendarColor(calendar.color, '#4f9d69'),
+    tags: [],
+    syncPolicy: 'internal_only',
+    visibility: 'private',
+    externalProviderLinks: [
+      {
+        provider: 'google',
+        externalEventId: String(item.id || ''),
+        url: String(item.htmlLink || ''),
+      },
+    ],
+  };
+}
+
+function mapMicrosoftCalendarItem(accountId, item = {}) {
+  return {
+    accountId,
+    provider: 'microsoft',
+    remoteCalendarId: String(item.id || ''),
+    displayName: String(item.name || item.id || 'Outlook Calendar').trim(),
+    selected: Boolean(item.canEdit ?? true),
+    color: normalizeCalendarColor(item.hexColor, '#4d8cf5'),
+    timeZone: String(item?.owner?.mailboxSettings?.timeZone || item?.timeZone || ''),
+    primary: Boolean(item.isDefaultCalendar),
+    accessRole: item.canEdit ? 'writer' : 'reader',
+  };
+}
+
+function mapMicrosoftEventItem(item = {}, calendar = {}) {
+  const startInfo = buildMicrosoftDateTime(item.start || {}, item.isAllDay ? 24 * 60 : 60);
+  const endInfo = buildMicrosoftDateTime(item.end || {}, item.isAllDay ? 24 * 60 : 60);
+  const startsAt = startInfo.date;
+  const endsAt = endInfo.date;
+
+  if (Number.isNaN(startsAt.getTime())) {
+    return null;
+  }
+
+  const effectiveEndsAt =
+    Number.isNaN(endsAt.getTime()) || endsAt <= startsAt ? endInfo.fallbackDate : endsAt;
+
+  return {
+    provider: 'microsoft',
+    remoteCalendarId: String(calendar.remoteCalendarId || calendar.id || ''),
+    remoteEventId: String(item.id || ''),
+    remoteVersion: String(item['@odata.etag'] || item.changeKey || item.lastModifiedDateTime || ''),
+    remoteDeleted: Boolean(item.isCancelled),
+    title: String(item.subject || 'Imported event').trim() || 'Imported event',
+    description: String(item.bodyPreview || ''),
+    location: String(item.location?.displayName || ''),
+    people: Array.isArray(item.attendees)
+      ? item.attendees
+          .map((attendee) => attendee?.emailAddress?.address || attendee?.emailAddress?.name || '')
+          .filter(Boolean)
+      : [],
+    type: 'meeting',
+    completed: false,
+    repeat: buildRepeatFromMicrosoftPattern(item.recurrence?.pattern),
+    hasDeadline: false,
+    groupName: '',
+    startsAt: startsAt.toISOString(),
+    endsAt: effectiveEndsAt.toISOString(),
+    isAllDay: Boolean(item.isAllDay),
+    sourceTimeZone: startInfo.sourceTimeZone || endInfo.sourceTimeZone || calendar.timeZone || '',
+    reminderMinutesBeforeStart: null,
+    desktopNotificationEnabled: false,
+    emailNotificationEnabled: false,
+    emailNotificationRecipients: [],
+    notifications: [],
+    color: normalizeCalendarColor(calendar.color, '#4d8cf5'),
+    tags: [],
+    syncPolicy: 'internal_only',
+    visibility: 'private',
+    externalProviderLinks: [
+      {
+        provider: 'microsoft',
+        externalEventId: String(item.id || ''),
+        url: String(item.webLink || item.onlineMeetingUrl || ''),
+      },
+    ],
+  };
+}
+
 class OAuthService {
   constructor({ db, cryptoService, shell, onAudit }) {
     this.db = db;
@@ -63,12 +457,105 @@ class OAuthService {
     this.callbackServers = new Map();
   }
 
+  getMetaValue(key) {
+    const row = this.db
+      .prepare('SELECT value FROM app_meta WHERE key = :key')
+      .get({ key });
+
+    return row?.value ?? '';
+  }
+
+  setMetaValue(key, value) {
+    this.db
+      .prepare(
+        `INSERT INTO app_meta (key, value)
+         VALUES (:key, :value)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .run({
+        key,
+        value: String(value || ''),
+      });
+  }
+
+  getResolvedClientSetup(provider) {
+    const setup = OAUTH_PROVIDER_SETUP[provider];
+    if (!setup) {
+      throw new Error(`Unsupported OAuth provider: ${provider}`);
+    }
+
+    const storedClientId = this.getMetaValue(setup.clientIdMetaKey);
+    const envClientId = process.env[setup.clientIdEnv] || '';
+    const storedRedirectUri = this.getMetaValue(setup.redirectUriMetaKey);
+    const envRedirectUri = process.env[setup.redirectUriEnv] || '';
+    const clientId = storedClientId || envClientId || '';
+    const redirectUri = storedRedirectUri || envRedirectUri || setup.defaultRedirectUri;
+
+    return {
+      ...setup,
+      provider,
+      clientId,
+      clientIdSource: storedClientId ? 'settings' : envClientId ? 'environment' : '',
+      redirectUri,
+      redirectUriSource: storedRedirectUri ? 'settings' : envRedirectUri ? 'environment' : 'default',
+    };
+  }
+
+  getClientConfigSnapshot() {
+    return Object.fromEntries(
+      Object.keys(OAUTH_PROVIDER_SETUP).map((provider) => {
+        const setup = this.getResolvedClientSetup(provider);
+        return [
+          provider,
+          {
+            provider,
+            label: setup.label,
+            clientId: setup.clientId,
+            clientIdConfigured: Boolean(setup.clientId),
+            clientIdSource: setup.clientIdSource,
+            redirectUri: setup.redirectUri,
+            redirectUriSource: setup.redirectUriSource,
+            defaultRedirectUri: setup.defaultRedirectUri,
+          },
+        ];
+      })
+    );
+  }
+
+  updateClientConfig(input = {}) {
+    for (const provider of Object.keys(OAUTH_PROVIDER_SETUP)) {
+      if (!Object.prototype.hasOwnProperty.call(input || {}, provider)) {
+        continue;
+      }
+
+      const setup = OAUTH_PROVIDER_SETUP[provider];
+      const providerInput = input?.[provider] || {};
+      if (Object.prototype.hasOwnProperty.call(providerInput, 'clientId')) {
+        this.setMetaValue(setup.clientIdMetaKey, sanitizeOAuthClientId(providerInput.clientId));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(providerInput, 'redirectUri')) {
+        this.setMetaValue(
+          setup.redirectUriMetaKey,
+          sanitizeOAuthRedirectUri(providerInput.redirectUri, provider)
+        );
+      }
+    }
+
+    return this.getClientConfigSnapshot();
+  }
+
   getProviders() {
+    const googleSetup = this.getResolvedClientSetup('google');
+    const microsoftSetup = this.getResolvedClientSetup('microsoft');
+
     return [
       {
         id: 'google',
         label: 'Google',
-        configured: Boolean(process.env.CALENDAR_GOOGLE_CLIENT_ID),
+        configured: Boolean(googleSetup.clientId),
+        clientIdSource: googleSetup.clientIdSource,
+        redirectUri: googleSetup.redirectUri,
         delegatedOnly: true,
         readScopes: [
           'openid',
@@ -83,8 +570,10 @@ class OAuthService {
       },
       {
         id: 'microsoft',
-        label: 'Microsoft',
-        configured: Boolean(process.env.CALENDAR_MICROSOFT_CLIENT_ID),
+        label: 'Outlook',
+        configured: Boolean(microsoftSetup.clientId),
+        clientIdSource: microsoftSetup.clientIdSource,
+        redirectUri: microsoftSetup.redirectUri,
         delegatedOnly: true,
         readScopes: ['openid', 'profile', 'email', 'offline_access', 'Calendars.Read'],
         writeScopes: ['Calendars.ReadWrite', MICROSOFT_MAIL_SEND_SCOPE],
@@ -94,15 +583,14 @@ class OAuthService {
 
   getProviderConfig(provider) {
     if (provider === 'google') {
-      const clientId = process.env.CALENDAR_GOOGLE_CLIENT_ID;
+      const clientSetup = this.getResolvedClientSetup(provider);
       return {
         provider,
-        clientId,
+        clientId: clientSetup.clientId,
         authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
         tokenUrl: 'https://oauth2.googleapis.com/token',
         revokeUrl: 'https://oauth2.googleapis.com/revoke',
-        redirectUri:
-          process.env.CALENDAR_GOOGLE_REDIRECT_URI || 'http://127.0.0.1:45781/oauth/google/callback',
+        redirectUri: clientSetup.redirectUri,
         readScopes: [
           'openid',
           'profile',
@@ -121,16 +609,14 @@ class OAuthService {
     }
 
     if (provider === 'microsoft') {
-      const clientId = process.env.CALENDAR_MICROSOFT_CLIENT_ID;
+      const clientSetup = this.getResolvedClientSetup(provider);
       return {
         provider,
-        clientId,
+        clientId: clientSetup.clientId,
         authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
         tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
         revokeUrl: null,
-        redirectUri:
-          process.env.CALENDAR_MICROSOFT_REDIRECT_URI ||
-          'http://127.0.0.1:45782/oauth/microsoft/callback',
+        redirectUri: clientSetup.redirectUri,
         readScopes: ['openid', 'profile', 'email', 'offline_access', 'Calendars.Read'],
         writeScopes: ['Calendars.ReadWrite', MICROSOFT_MAIL_SEND_SCOPE],
         extraParams: {},
@@ -269,7 +755,8 @@ class OAuthService {
   async startConnect(provider, accessLevel = 'read') {
     const config = this.getProviderConfig(provider);
     if (!config.clientId) {
-      throw new Error(`${provider} OAuth is not configured yet. Add the client ID first.`);
+      const label = OAUTH_PROVIDER_SETUP[provider]?.label || provider;
+      throw new Error(`${label} connection is not configured yet. Add the OAuth client ID in Settings first.`);
     }
 
     await this.ensureCallbackServer(config);
@@ -337,7 +824,7 @@ class OAuthService {
     });
 
     if (this.shell?.openExternal) {
-      this.shell.openExternal(authorizationUrl.toString());
+      await this.shell.openExternal(authorizationUrl.toString());
     }
 
     return {
@@ -832,6 +1319,297 @@ class OAuthService {
       provider: senderAccount.provider,
       recipients,
     };
+  }
+
+  async requestProviderJson(url, accessToken, options = {}) {
+    const response = await fetch(url, {
+      method: options.method || 'GET',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json',
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (response.status === 204) {
+      return {};
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json')
+      ? await response.json()
+      : { message: await response.text() };
+
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message || payload?.message || `Provider request failed with status ${response.status}.`
+      );
+    }
+
+    return payload;
+  }
+
+  async listExternalCalendars(accountId) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account || account.status !== 'connected') {
+      throw new Error('Connected account was not found.');
+    }
+
+    const accessToken = await this.getAccessTokenForAccount(accountId);
+    if (account.provider === 'google') {
+      let nextPageToken = '';
+      const calendars = [];
+
+      do {
+        const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+        url.searchParams.set('maxResults', '250');
+        if (nextPageToken) {
+          url.searchParams.set('pageToken', nextPageToken);
+        }
+
+        const payload = await this.requestProviderJson(url.toString(), accessToken);
+        calendars.push(
+          ...(Array.isArray(payload.items) ? payload.items : []).map((item) =>
+            mapGoogleCalendarItem(accountId, item)
+          )
+        );
+        nextPageToken = String(payload.nextPageToken || '').trim();
+      } while (nextPageToken);
+
+      return calendars.filter((calendar) => calendar.remoteCalendarId);
+    }
+
+    if (account.provider === 'microsoft') {
+      const calendars = [];
+      let nextUrl = 'https://graph.microsoft.com/v1.0/me/calendars?$top=100';
+
+      while (nextUrl) {
+        const payload = await this.requestProviderJson(nextUrl, accessToken);
+        calendars.push(
+          ...(Array.isArray(payload.value) ? payload.value : []).map((item) =>
+            mapMicrosoftCalendarItem(accountId, item)
+          )
+        );
+        nextUrl = String(payload['@odata.nextLink'] || '').trim();
+      }
+
+      return calendars.filter((calendar) => calendar.remoteCalendarId);
+    }
+
+    throw new Error(`Provider does not support calendar listing: ${account.provider}`);
+  }
+
+  async listExternalEvents(accountId, remoteCalendarId, context = {}) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account || account.status !== 'connected') {
+      throw new Error('Connected account was not found.');
+    }
+
+    const accessToken = await this.getAccessTokenForAccount(accountId);
+    const calendar = {
+      remoteCalendarId,
+      color: context.color || '#4f9d69',
+      timeZone: context.timeZone || '',
+    };
+
+    if (account.provider === 'google') {
+      let nextPageToken = '';
+      const events = [];
+
+      do {
+        const url = new URL(
+          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+            remoteCalendarId
+          )}/events`
+        );
+        url.searchParams.set('singleEvents', 'true');
+        url.searchParams.set('showDeleted', 'true');
+        url.searchParams.set('maxResults', '2500');
+        if (nextPageToken) {
+          url.searchParams.set('pageToken', nextPageToken);
+        }
+
+        const payload = await this.requestProviderJson(url.toString(), accessToken);
+        events.push(
+          ...(Array.isArray(payload.items) ? payload.items : [])
+            .map((item) => mapGoogleEventItem(item, calendar))
+            .filter(Boolean)
+        );
+        nextPageToken = String(payload.nextPageToken || '').trim();
+      } while (nextPageToken);
+
+      return {
+        provider: 'google',
+        remoteCalendarId,
+        events,
+        syncCursor: null,
+      };
+    }
+
+    if (account.provider === 'microsoft') {
+      const events = [];
+      let nextUrl = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(
+        remoteCalendarId
+      )}/events?$top=250&$select=id,subject,bodyPreview,location,attendees,start,end,isAllDay,isCancelled,recurrence,webLink,onlineMeetingUrl,lastModifiedDateTime,changeKey`;
+
+      while (nextUrl) {
+        const payload = await this.requestProviderJson(nextUrl, accessToken);
+        events.push(
+          ...(Array.isArray(payload.value) ? payload.value : [])
+            .map((item) => mapMicrosoftEventItem(item, calendar))
+            .filter(Boolean)
+        );
+        nextUrl = String(payload['@odata.nextLink'] || '').trim();
+      }
+
+      return {
+        provider: 'microsoft',
+        remoteCalendarId,
+        events,
+        syncCursor: null,
+      };
+    }
+
+    throw new Error(`Provider does not support event listing: ${account.provider}`);
+  }
+
+  async createOutboundCalendarEvent({ accountId, remoteCalendarId, event, attendees = [] }) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account || account.status !== 'connected') {
+      throw new Error('Connected account was not found.');
+    }
+
+    const accessToken = await this.getAccessTokenForAccount(accountId);
+    if (account.provider === 'google') {
+      const url = new URL(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+          remoteCalendarId
+        )}/events`
+      );
+      url.searchParams.set('sendUpdates', 'all');
+      const payload = await this.requestProviderJson(url.toString(), accessToken, {
+        method: 'POST',
+        body: buildGoogleCalendarEventPayload(event, attendees),
+      });
+      return {
+        accountId,
+        provider: 'google',
+        remoteCalendarId,
+        remoteEventId: String(payload.id || ''),
+        remoteVersion: String(payload.etag || payload.updated || payload.sequence || ''),
+        url: String(payload.htmlLink || ''),
+      };
+    }
+
+    if (account.provider === 'microsoft') {
+      const url = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(
+        remoteCalendarId
+      )}/events`;
+      const payload = await this.requestProviderJson(url, accessToken, {
+        method: 'POST',
+        body: buildMicrosoftCalendarEventPayload(event, attendees),
+      });
+      return {
+        accountId,
+        provider: 'microsoft',
+        remoteCalendarId,
+        remoteEventId: String(payload.id || ''),
+        remoteVersion: String(payload['@odata.etag'] || payload.changeKey || payload.lastModifiedDateTime || ''),
+        url: String(payload.webLink || payload.onlineMeetingUrl || ''),
+      };
+    }
+
+    throw new Error(`Provider does not support calendar invites: ${account.provider}`);
+  }
+
+  async updateOutboundCalendarEvent({
+    accountId,
+    remoteCalendarId,
+    remoteEventId,
+    event,
+    attendees = [],
+  }) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account || account.status !== 'connected') {
+      throw new Error('Connected account was not found.');
+    }
+
+    const accessToken = await this.getAccessTokenForAccount(accountId);
+    if (account.provider === 'google') {
+      const url = new URL(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+          remoteCalendarId
+        )}/events/${encodeURIComponent(remoteEventId)}`
+      );
+      url.searchParams.set('sendUpdates', 'all');
+      const payload = await this.requestProviderJson(url.toString(), accessToken, {
+        method: 'PATCH',
+        body: buildGoogleCalendarEventPayload(event, attendees),
+      });
+      return {
+        accountId,
+        provider: 'google',
+        remoteCalendarId,
+        remoteEventId: String(payload.id || remoteEventId),
+        remoteVersion: String(payload.etag || payload.updated || payload.sequence || ''),
+        url: String(payload.htmlLink || ''),
+      };
+    }
+
+    if (account.provider === 'microsoft') {
+      const url = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(
+        remoteCalendarId
+      )}/events/${encodeURIComponent(remoteEventId)}`;
+      const payload = await this.requestProviderJson(url, accessToken, {
+        method: 'PATCH',
+        body: buildMicrosoftCalendarEventPayload(event, attendees),
+      });
+      return {
+        accountId,
+        provider: 'microsoft',
+        remoteCalendarId,
+        remoteEventId: String(payload.id || remoteEventId),
+        remoteVersion: String(payload['@odata.etag'] || payload.changeKey || payload.lastModifiedDateTime || ''),
+        url: String(payload.webLink || payload.onlineMeetingUrl || ''),
+      };
+    }
+
+    throw new Error(`Provider does not support calendar invite updates: ${account.provider}`);
+  }
+
+  async deleteOutboundCalendarEvent({ accountId, remoteCalendarId, remoteEventId }) {
+    const account = this.getAccountTokenRow(accountId);
+    if (!account || account.status !== 'connected') {
+      throw new Error('Connected account was not found.');
+    }
+
+    const accessToken = await this.getAccessTokenForAccount(accountId);
+    if (account.provider === 'google') {
+      const url = new URL(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+          remoteCalendarId
+        )}/events/${encodeURIComponent(remoteEventId)}`
+      );
+      url.searchParams.set('sendUpdates', 'all');
+      await this.requestProviderJson(url.toString(), accessToken, {
+        method: 'DELETE',
+      });
+      return { provider: 'google', remoteEventId };
+    }
+
+    if (account.provider === 'microsoft') {
+      const url = `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(
+        remoteCalendarId
+      )}/events/${encodeURIComponent(remoteEventId)}`;
+      await this.requestProviderJson(url, accessToken, {
+        method: 'DELETE',
+      });
+      return { provider: 'microsoft', remoteEventId };
+    }
+
+    throw new Error(`Provider does not support calendar invite deletion: ${account.provider}`);
   }
 
   disconnectAccount(accountId) {

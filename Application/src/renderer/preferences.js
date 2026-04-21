@@ -18,6 +18,8 @@ export const STORAGE_KEYS = {
   defaultQuickType: 'calendar-settings-default-quick-type',
   defaultQuickSendFrom: 'calendar-settings-default-quick-send-from',
   defaultQuickDuration: 'calendar-settings-default-quick-duration',
+  lastGoogleInviteTarget: 'calendar-settings-last-google-invite-target',
+  lastMicrosoftInviteTarget: 'calendar-settings-last-microsoft-invite-target',
 };
 
 export const DEFAULT_PREFERENCES = {
@@ -34,6 +36,8 @@ export const DEFAULT_PREFERENCES = {
   defaultQuickType: 'meeting',
   defaultQuickSendFrom: 'internal',
   defaultQuickDuration: 60,
+  lastGoogleInviteTarget: null,
+  lastMicrosoftInviteTarget: null,
   notificationEmail: '',
   hostedEmail: '',
   hostedDeviceName: '',
@@ -45,6 +49,20 @@ function getLocalStorage() {
   }
 
   return window.localStorage;
+}
+
+function readJsonPreference(storage, key, fallback = null) {
+  const rawValue = storage?.getItem(key);
+  if (!rawValue) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function getStoredPreferences() {
@@ -77,6 +95,16 @@ export function getStoredPreferences() {
     defaultQuickDuration: Number(
       storage?.getItem(STORAGE_KEYS.defaultQuickDuration) ||
         DEFAULT_PREFERENCES.defaultQuickDuration
+    ),
+    lastGoogleInviteTarget: readJsonPreference(
+      storage,
+      STORAGE_KEYS.lastGoogleInviteTarget,
+      DEFAULT_PREFERENCES.lastGoogleInviteTarget
+    ),
+    lastMicrosoftInviteTarget: readJsonPreference(
+      storage,
+      STORAGE_KEYS.lastMicrosoftInviteTarget,
+      DEFAULT_PREFERENCES.lastMicrosoftInviteTarget
     ),
     notificationEmail:
       storage?.getItem(STORAGE_KEYS.notificationEmail) || DEFAULT_PREFERENCES.notificationEmail,
@@ -119,6 +147,14 @@ export function persistPreferences(preferences) {
   storage.setItem(
     STORAGE_KEYS.defaultQuickDuration,
     String(preferences.defaultQuickDuration || DEFAULT_PREFERENCES.defaultQuickDuration)
+  );
+  storage.setItem(
+    STORAGE_KEYS.lastGoogleInviteTarget,
+    JSON.stringify(preferences.lastGoogleInviteTarget || null)
+  );
+  storage.setItem(
+    STORAGE_KEYS.lastMicrosoftInviteTarget,
+    JSON.stringify(preferences.lastMicrosoftInviteTarget || null)
   );
   storage.setItem(STORAGE_KEYS.notificationEmail, preferences.notificationEmail || '');
   storage.setItem(STORAGE_KEYS.hostedEmail, preferences.hostedEmail || '');

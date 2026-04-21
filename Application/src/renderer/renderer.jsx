@@ -23,6 +23,7 @@ import {
   createDraftEventFromEvent,
   createEmptyDraftEvent,
   DEFAULT_NOTIFICATION_REMINDER_MINUTES,
+  extractInviteeEmails,
   formatDateForInput,
   formatTimeForInput,
   getDraftDurationMinutes,
@@ -32,6 +33,7 @@ import {
   normalizeNotificationDrafts,
   normalizeNotificationRecipients,
   normalizeReminderMinutesBeforeStart,
+  scopeToInviteProvider,
   syncDraftNotificationFields,
   setDraftDuration,
 } from './eventDraft';
@@ -40,6 +42,10 @@ import {
   shouldPromoteQuickCreateDraft,
   shouldPromoteQuickEditDraft,
 } from './composerRouting';
+import {
+  focusFirstAvailable,
+  getRegionShortcutTarget,
+} from './keyboardNavigation';
 import { STORAGE_KEYS, useCalendarPreferences, updatePreference } from './preferences';
 import './styles.css';
 
@@ -209,6 +215,33 @@ function getDefaultNotificationRecipient(scope, connectedAccounts, knownNotifica
   return knownNotificationEmails[0] || '';
 }
 
+function getLastInviteTargetForProvider(provider, preferences) {
+  if (provider === 'google') {
+    return preferences.lastGoogleInviteTarget || null;
+  }
+  if (provider === 'microsoft') {
+    return preferences.lastMicrosoftInviteTarget || null;
+  }
+  return null;
+}
+
+function getInviteTargetPreferencePatch(provider, target) {
+  const normalizedTarget = target
+    ? {
+        accountId: target.accountId || '',
+        calendarId: target.calendarId || '',
+      }
+    : null;
+
+  if (provider === 'google') {
+    return { lastGoogleInviteTarget: normalizedTarget };
+  }
+  if (provider === 'microsoft') {
+    return { lastMicrosoftInviteTarget: normalizedTarget };
+  }
+  return {};
+}
+
 function createDraftForDate(date, preferences) {
   return createEmptyDraftEvent(
     date,
@@ -354,9 +387,17 @@ function App() {
   const [hostedStatusMessage, setHostedStatusMessage] = useState('');
   const [oauthBusyProvider, setOAuthBusyProvider] = useState('');
   const [oauthStatusMessage, setOAuthStatusMessage] = useState('');
+  const [accountBusyId, setAccountBusyId] = useState('');
+  const [externalCalendarsByAccount, setExternalCalendarsByAccount] = useState({});
+  const [composerStatusMessage, setComposerStatusMessage] = useState('');
+  const [pendingInviteConfirmation, setPendingInviteConfirmation] = useState(null);
   const snapshotRef = useRef(null);
   const holidayPreloadRequestRef = useRef(0);
   const quickPopoverRef = useRef(null);
+  const sidebarRegionRef = useRef(null);
+  const appHeaderRegionRef = useRef(null);
+  const calendarHeaderRegionRef = useRef(null);
+  const calendarViewRegionRef = useRef(null);
   const oauthPollingRef = useRef(null);
   const oauthPollingDeadlineRef = useRef(0);
 
@@ -411,6 +452,7 @@ function App() {
   const allEvents = snapshot?.events || [];
   const connectedAccounts = snapshot?.security?.auth?.connectedAccounts || [];
   const notificationProviders = snapshot?.security?.auth?.providers || [];
+  const oauthClientConfig = snapshot?.security?.auth?.clientConfig || {};
   const knownNotificationEmails = useMemo(
     () => collectKnownNotificationEmails(preferences, connectedAccounts),
     [connectedAccounts, preferences.notificationEmail, preferences.hostedEmail]
@@ -620,11 +662,30 @@ function App() {
   const closeComposer = () => {
     setComposerState(EMPTY_COMPOSER_STATE);
     setActiveEvent(null);
+    setComposerStatusMessage('');
+    setPendingInviteConfirmation(null);
+  };
+
+  const applyInviteDefaultsToDraft = (draft) => {
+    const provider = scopeToInviteProvider(draft.scope);
+    const lastTarget = getLastInviteTargetForProvider(provider, preferences);
+    if (!provider || draft.inviteTargetAccountId || !lastTarget?.accountId) {
+      return draft;
+    }
+
+    return {
+      ...draft,
+      inviteTargetProvider: provider,
+      inviteTargetAccountId: lastTarget.accountId,
+      inviteTargetCalendarId: lastTarget.calendarId || '',
+    };
   };
 
   const openQuickComposer = ({ date = new Date(), anchorPoint = null, eventToEdit = null } = {}) => {
     setIsAboutOpen(false);
     setIsUpcomingOpen(false);
+    setComposerStatusMessage('');
+    setPendingInviteConfirmation(null);
     if (eventToEdit) {
       setActiveEvent(eventToEdit);
       setSelectedDate(new Date(eventToEdit.startsAt));
@@ -650,10 +711,12 @@ function App() {
   const openDrawerComposer = ({ date = new Date(), eventToEdit = null } = {}) => {
     setIsAboutOpen(false);
     setIsUpcomingOpen(false);
+    setComposerStatusMessage('');
+    setPendingInviteConfirmation(null);
     if (eventToEdit) {
       setActiveEvent(eventToEdit);
       setSelectedDate(new Date(eventToEdit.startsAt));
-      setDraftEvent(createDraftEventFromEvent(eventToEdit));
+      setDraftEvent(applyInviteDefaultsToDraft(createDraftEventFromEvent(eventToEdit)));
       setComposerState({
         variant: 'drawer',
         mode: 'edit',
@@ -664,7 +727,7 @@ function App() {
 
     setActiveEvent(null);
     setSelectedDate(date);
-    setDraftEvent(createDraftForDate(date, preferences));
+    setDraftEvent(applyInviteDefaultsToDraft(createDraftForDate(date, preferences)));
     setComposerState({
       variant: 'drawer',
       mode: 'create',
@@ -823,6 +886,18 @@ function App() {
       }
 
       if (name === 'scope') {
+        const inviteProvider = scopeToInviteProvider(value);
+        nextDraft.inviteTargetProvider = inviteProvider;
+        if (!inviteProvider) {
+          nextDraft.inviteTargetAccountId = '';
+          nextDraft.inviteTargetCalendarId = '';
+          nextDraft.inviteDeliveryMode = 'local_only';
+        } else if (current.inviteTargetProvider !== inviteProvider) {
+          const lastTarget = getLastInviteTargetForProvider(inviteProvider, preferences);
+          nextDraft.inviteTargetAccountId = lastTarget?.accountId || '';
+          nextDraft.inviteTargetCalendarId = lastTarget?.calendarId || '';
+        }
+
         const notifications = normalizeNotificationDrafts(current.notifications);
         if (notifications.length > 0) {
           nextDraft.notifications = notifications.map((notification) => {
@@ -934,6 +1009,47 @@ function App() {
     });
   };
 
+  const handleLoadExternalCalendars = async (accountId) => {
+    if (!accountId) {
+      return;
+    }
+
+    const existingState = externalCalendarsByAccount[accountId];
+    if (existingState?.status === 'ready' || existingState?.status === 'loading') {
+      return;
+    }
+
+    setExternalCalendarsByAccount((current) => ({
+      ...current,
+      [accountId]: {
+        status: 'loading',
+        items: current[accountId]?.items || [],
+        error: '',
+      },
+    }));
+
+    try {
+      const calendars = await window.calendarApp.listExternalCalendars({ accountId });
+      setExternalCalendarsByAccount((current) => ({
+        ...current,
+        [accountId]: {
+          status: 'ready',
+          items: Array.isArray(calendars) ? calendars : [],
+          error: '',
+        },
+      }));
+    } catch (error) {
+      setExternalCalendarsByAccount((current) => ({
+        ...current,
+        [accountId]: {
+          status: 'error',
+          items: current[accountId]?.items || [],
+          error: error?.message || 'Could not load calendars for this account.',
+        },
+      }));
+    }
+  };
+
   const persistQuickComposerDefaults = () => {
     updatePreference(setPreferences, {
       defaultQuickType: draftEvent.type,
@@ -945,6 +1061,37 @@ function App() {
     });
   };
 
+  const commitEventSave = async (payload) => {
+    setComposerStatusMessage('');
+    try {
+      const nextSnapshot =
+        composerState.mode === 'edit' && activeEvent
+          ? await window.calendarApp.updateEvent({
+              id: activeEvent.id,
+              ...payload,
+            })
+          : await window.calendarApp.createEvent(payload);
+
+      snapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+      persistQuickComposerDefaults();
+      if (payload.inviteDeliveryMode === 'provider_invite' && payload.inviteTargetProvider) {
+        updatePreference(
+          setPreferences,
+          getInviteTargetPreferencePatch(payload.inviteTargetProvider, {
+            accountId: payload.inviteTargetAccountId,
+            calendarId: payload.inviteTargetCalendarId,
+          })
+        );
+      }
+      setSelectedDate(new Date(payload.startsAt));
+      closeComposer();
+    } catch (error) {
+      setComposerStatusMessage(error?.message || 'The event could not be saved.');
+      setPendingInviteConfirmation(null);
+    }
+  };
+
   const handleSaveEvent = async (event) => {
     event.preventDefault();
 
@@ -953,20 +1100,38 @@ function App() {
     }
 
     const payload = buildEventPayloadFromDraft(draftEvent, preferences.defaultEventDuration);
+    const inviteEmails = extractInviteeEmails(payload.inviteRecipients);
 
-    const nextSnapshot =
-      composerState.mode === 'edit' && activeEvent
-        ? await window.calendarApp.updateEvent({
-            id: activeEvent.id,
-            ...payload,
-          })
-        : await window.calendarApp.createEvent(payload);
+    if (
+      payload.inviteDeliveryMode === 'provider_invite' &&
+      inviteEmails.length > 0 &&
+      payload.syncPolicy === 'internal_only'
+    ) {
+      setComposerStatusMessage(
+        'Internal events stay local. Switch Event scope to Work or Personal before sending invites.'
+      );
+      return;
+    }
 
-    snapshotRef.current = nextSnapshot;
-    setSnapshot(nextSnapshot);
-    persistQuickComposerDefaults();
-    setSelectedDate(new Date(payload.startsAt));
-    closeComposer();
+    if (
+      payload.inviteDeliveryMode === 'provider_invite' &&
+      inviteEmails.length > 0 &&
+      (!payload.inviteTargetAccountId || !payload.inviteTargetCalendarId)
+    ) {
+      setComposerStatusMessage('Choose the account and calendar to send invites through, or save locally only.');
+      setComposerState((current) => promoteComposerStateToDrawer(current));
+      return;
+    }
+
+    if (payload.inviteDeliveryMode === 'provider_invite' && inviteEmails.length > 0) {
+      setPendingInviteConfirmation({
+        payload,
+        inviteEmails,
+      });
+      return;
+    }
+
+    await commitEventSave(payload);
   };
 
   const handleDeleteEvent = async (eventToDelete = activeEvent) => {
@@ -974,10 +1139,26 @@ function App() {
       return;
     }
 
-    const nextSnapshot = await window.calendarApp.deleteEvent(eventToDelete.id);
-    snapshotRef.current = nextSnapshot;
-    setSnapshot(nextSnapshot);
-    closeComposer();
+    const hasOutboundLink = (eventToDelete.externalProviderLinks || []).some(
+      (link) => String(link?.mode || '').toLowerCase() === 'outbound'
+    );
+    if (hasOutboundLink) {
+      const shouldDelete = window.confirm(
+        'Delete this event and cancel/remove its provider invite too?'
+      );
+      if (!shouldDelete) {
+        return;
+      }
+    }
+
+    try {
+      const nextSnapshot = await window.calendarApp.deleteEvent(eventToDelete.id);
+      snapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+      closeComposer();
+    } catch (error) {
+      setComposerStatusMessage(error?.message || 'The event could not be deleted.');
+    }
   };
 
   const handleHostedAction = async (actionKey, action, successMessage) => {
@@ -1023,25 +1204,37 @@ function App() {
   });
 
   const handleStartOAuthConnect = async (provider) => {
-    const providerLabel = provider === 'google' ? 'Google' : provider === 'microsoft' ? 'Microsoft' : provider;
+    const providerLabel = provider === 'google' ? 'Google' : provider === 'microsoft' ? 'Outlook' : provider;
+    const knownProviderAccounts = new Map(
+      connectedAccounts
+        .filter((account) => account.provider === provider)
+        .map((account) => [account.accountId, account.updatedAt || ''])
+    );
     stopOAuthPolling();
     setOAuthBusyProvider(provider);
-    setOAuthStatusMessage(`Finish ${providerLabel} sign-in in the browser. We'll refresh here automatically.`);
+    setOAuthStatusMessage(`Opening ${providerLabel} sign-in in your browser...`);
 
     try {
       await window.calendarApp.startOAuthConnect(provider, 'write');
+      setOAuthStatusMessage(`Finish ${providerLabel} sign-in in the browser. We'll refresh here automatically.`);
       oauthPollingDeadlineRef.current = Date.now() + 3 * 60 * 1000;
       oauthPollingRef.current = window.setInterval(async () => {
         try {
           const nextSnapshot = await refreshSnapshot();
           const matchedAccount = (nextSnapshot?.security?.auth?.connectedAccounts || []).find(
-            (account) => account.provider === provider && account.emailSendCapable
+            (account) =>
+              account.provider === provider &&
+              account.status === 'connected' &&
+              account.canWrite &&
+              account.writeScopeGranted &&
+              (!knownProviderAccounts.has(account.accountId) ||
+                knownProviderAccounts.get(account.accountId) !== (account.updatedAt || ''))
           );
 
           if (matchedAccount) {
             stopOAuthPolling();
             setOAuthBusyProvider('');
-            setOAuthStatusMessage(`${providerLabel} is ready for email reminders.`);
+            setOAuthStatusMessage(`${providerLabel} is ready for calendar invites and reminders.`);
             return;
           }
 
@@ -1060,6 +1253,100 @@ function App() {
       stopOAuthPolling();
       setOAuthBusyProvider('');
       setOAuthStatusMessage(error?.message || `${providerLabel} sign-in could not be started.`);
+    }
+  };
+
+  const handleSaveOAuthClientConfig = async (clientConfigDraft) => {
+    setOAuthStatusMessage('');
+    const result = await window.calendarApp.updateOAuthClientConfig(clientConfigDraft);
+    if (result?.security) {
+      setSnapshot((current) => {
+        const nextSnapshot = {
+          ...(current || {}),
+          security: result.security,
+        };
+        snapshotRef.current = nextSnapshot;
+        return nextSnapshot;
+      });
+    } else {
+      await refreshSnapshot();
+    }
+    setOAuthStatusMessage('Connection setup saved.');
+    return result;
+  };
+
+  const handleOpenConnectionSettings = async () => {
+    setOAuthStatusMessage('Opening Settings for Google and Outlook connections...');
+    try {
+      await openSettingsExperience();
+      setOAuthStatusMessage('Use Settings to configure and connect Google or Outlook accounts.');
+    } catch (error) {
+      setOAuthStatusMessage(error?.message || 'Settings could not be opened.');
+    }
+  };
+
+  const handleDisconnectAccount = async (accountId) => {
+    if (!accountId) {
+      return;
+    }
+
+    setAccountBusyId(accountId);
+    setOAuthStatusMessage('');
+    try {
+      const result = await window.calendarApp.disconnectAccount(accountId);
+      if (result?.security) {
+        setSnapshot((current) => {
+          const nextSnapshot = {
+            ...(current || {}),
+            security: result.security,
+          };
+          snapshotRef.current = nextSnapshot;
+          return nextSnapshot;
+        });
+      } else {
+        await refreshSnapshot();
+      }
+      setOAuthStatusMessage('Account disconnected locally.');
+    } catch (error) {
+      setOAuthStatusMessage(error?.message || 'The account could not be disconnected.');
+    } finally {
+      setAccountBusyId('');
+    }
+  };
+
+  const handleRevokeAccount = async (accountId) => {
+    if (!accountId) {
+      return;
+    }
+
+    const shouldRevoke = window.confirm(
+      'Revoke this account connection? This removes local tokens and asks the provider to revoke access when supported.'
+    );
+    if (!shouldRevoke) {
+      return;
+    }
+
+    setAccountBusyId(accountId);
+    setOAuthStatusMessage('');
+    try {
+      const result = await window.calendarApp.revokeAccount(accountId);
+      if (result?.security) {
+        setSnapshot((current) => {
+          const nextSnapshot = {
+            ...(current || {}),
+            security: result.security,
+          };
+          snapshotRef.current = nextSnapshot;
+          return nextSnapshot;
+        });
+      } else {
+        await refreshSnapshot();
+      }
+      setOAuthStatusMessage('Account revoked.');
+    } catch (error) {
+      setOAuthStatusMessage(error?.message || 'The account could not be revoked.');
+    } finally {
+      setAccountBusyId('');
     }
   };
 
@@ -1089,6 +1376,63 @@ function App() {
     };
   }, [composerState.variant, activeEvent]);
 
+  useEffect(() => {
+    if (windowMode !== 'main') {
+      return undefined;
+    }
+
+    const handleRegionShortcut = (keyboardEvent) => {
+      const targetRegion = getRegionShortcutTarget(keyboardEvent);
+      if (!targetRegion) {
+        return;
+      }
+
+      const hasBlockingDialog =
+        composerState.variant === 'drawer' ||
+        isAboutOpen ||
+        Boolean(pendingInviteConfirmation);
+
+      if (hasBlockingDialog) {
+        return;
+      }
+
+      keyboardEvent.preventDefault();
+
+      if (targetRegion === 'sidebar') {
+        focusFirstAvailable(
+          sidebarRegionRef.current,
+          '[data-keyboard-focus="sidebar-primary"], [data-keyboard-focus="sidebar-search"]'
+        );
+        return;
+      }
+
+      if (targetRegion === 'header') {
+        const focusedCalendarHeader = focusFirstAvailable(
+          calendarHeaderRegionRef.current,
+          '[data-keyboard-focus="calendar-header-primary"], .calendar-view-toggle, button'
+        );
+
+        if (!focusedCalendarHeader) {
+          focusFirstAvailable(
+            appHeaderRegionRef.current,
+            '[data-keyboard-focus="app-header-primary"], button'
+          );
+        }
+        return;
+      }
+
+      if (targetRegion === 'view') {
+        focusFirstAvailable(
+          calendarViewRegionRef.current,
+          '[data-calendar-focus="active"], [data-calendar-focus="today"], [data-calendar-focus="first"], button'
+        );
+      }
+    };
+
+    window.addEventListener('keydown', handleRegionShortcut);
+    return () => window.removeEventListener('keydown', handleRegionShortcut);
+  }, [composerState.variant, isAboutOpen, pendingInviteConfirmation, windowMode]);
+
   if (!isSetupComplete && windowMode === 'main') {
     return (
       <Introduction
@@ -1099,6 +1443,16 @@ function App() {
         onOpenChange={() => {}}
         onSavePreferences={importHolidayPreferences}
         onSkip={handleSkipSetup}
+        connectedAccounts={connectedAccounts}
+        providers={notificationProviders}
+        oauthClientConfig={oauthClientConfig}
+        onConnectProvider={handleStartOAuthConnect}
+        onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+        onDisconnectAccount={handleDisconnectAccount}
+        onRevokeAccount={handleRevokeAccount}
+        oauthBusyProvider={oauthBusyProvider}
+        accountBusyId={accountBusyId}
+        oauthStatusMessage={oauthStatusMessage}
       />
     );
   }
@@ -1185,6 +1539,16 @@ function App() {
           }
           hostedBusyAction={hostedBusyAction}
           hostedStatusMessage={hostedStatusMessage}
+          connectedAccounts={connectedAccounts}
+          providers={notificationProviders}
+          oauthClientConfig={oauthClientConfig}
+          onConnectProvider={handleStartOAuthConnect}
+          onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+          onDisconnectAccount={handleDisconnectAccount}
+          onRevokeAccount={handleRevokeAccount}
+          oauthBusyProvider={oauthBusyProvider}
+          accountBusyId={accountBusyId}
+          oauthStatusMessage={oauthStatusMessage}
         />
       </>
     );
@@ -1198,6 +1562,7 @@ function App() {
       <div className="app-background-layer" aria-hidden="true" />
       <div className="app-shell overflow-hidden">
         <Sidebar
+          regionRef={sidebarRegionRef}
           availableTags={availableTags}
           events={events}
           visibleEvents={visibleEvents}
@@ -1222,6 +1587,7 @@ function App() {
 
         <div className="flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
           <Header
+            regionRef={appHeaderRegionRef}
             eventCount={snapshot?.stats?.activeEventCount || 0}
             onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
             onOpenAbout={() => setIsAboutOpen(true)}
@@ -1245,6 +1611,8 @@ function App() {
             ) : null}
 
             <CalendarViewport
+              regionRef={calendarViewRegionRef}
+              headerRef={calendarHeaderRegionRef}
               calendarView={calendarView}
               events={events}
               preferences={preferences}
@@ -1278,6 +1646,7 @@ function App() {
         connectedAccounts={connectedAccounts}
         providers={notificationProviders}
         onConnectProvider={handleStartOAuthConnect}
+        onOpenConnectionSettings={handleOpenConnectionSettings}
         oauthBusyProvider={oauthBusyProvider}
         oauthStatusMessage={oauthStatusMessage}
         onSubmit={handleSaveEvent}
@@ -1307,12 +1676,74 @@ function App() {
         knownNotificationEmails={knownNotificationEmails}
         connectedAccounts={connectedAccounts}
         providers={notificationProviders}
+        externalCalendarsByAccount={externalCalendarsByAccount}
+        onLoadExternalCalendars={handleLoadExternalCalendars}
         onConnectProvider={handleStartOAuthConnect}
+        onOpenConnectionSettings={handleOpenConnectionSettings}
         oauthBusyProvider={oauthBusyProvider}
         oauthStatusMessage={oauthStatusMessage}
+        composerStatusMessage={composerStatusMessage}
         onDelete={() => handleDeleteEvent(activeEvent)}
         onSubmit={handleSaveEvent}
       />
+
+      {pendingInviteConfirmation ? (
+        <div className="invite-confirmation-overlay" role="presentation">
+          <section
+            className="invite-confirmation-dialog app-subsurface"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-confirmation-title"
+          >
+            <p className="settings-section-eyebrow">Confirm invite delivery</p>
+            <h2 id="invite-confirmation-title" className="invite-confirmation-title">
+              Send calendar invites?
+            </h2>
+            <p className="invite-confirmation-copy">
+              {pendingInviteConfirmation.inviteEmails.length} guest email
+              {pendingInviteConfirmation.inviteEmails.length === 1 ? '' : 's'} can receive a real
+              calendar invite through your selected account. You can also save this event locally only.
+            </p>
+            <div className="invite-confirmation-recipients">
+              {pendingInviteConfirmation.inviteEmails.map((email) => (
+                <span key={email}>{email}</span>
+              ))}
+            </div>
+            {composerStatusMessage ? (
+              <p className="settings-inline-warning">{composerStatusMessage}</p>
+            ) : null}
+            <div className="invite-confirmation-actions">
+              <button
+                type="button"
+                className="app-button app-button--secondary"
+                onClick={() => setPendingInviteConfirmation(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="app-button app-button--secondary"
+                onClick={() =>
+                  commitEventSave({
+                    ...pendingInviteConfirmation.payload,
+                    inviteDeliveryMode: 'local_only',
+                    lastInviteError: '',
+                  })
+                }
+              >
+                Save locally only
+              </button>
+              <button
+                type="button"
+                className="app-button app-button--primary"
+                onClick={() => commitEventSave(pendingInviteConfirmation.payload)}
+              >
+                Send invites
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <AboutDrawer
         isOpen={isAboutOpen}

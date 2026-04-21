@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { buildMonthTiles, getWeekdayLabels, isSameDay } from './calendar-helpers';
 
 export default function Sidebar({
+  regionRef,
   availableTags,
   events,
   visibleEvents,
@@ -192,7 +193,11 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sidebar-shell app-panel w-full min-h-0 rounded-[28px] px-4 py-5">
+    <aside
+      ref={regionRef}
+      className="sidebar-shell app-panel w-full min-h-0 rounded-[28px] px-4 py-5"
+      aria-label="Sidebar"
+    >
       <div className="flex h-full flex-col">
         <button
           type="button"
@@ -202,6 +207,7 @@ export default function Sidebar({
               openInDrawer: true,
             })
           }
+          data-keyboard-focus="sidebar-primary"
           className="app-button app-button--primary flex items-center justify-between rounded-2xl px-5 py-4 text-left"
         >
           <span className="flex items-center gap-3">
@@ -391,6 +397,7 @@ export default function Sidebar({
             value={searchQuery}
             onChange={(event) => onSearchQueryChange?.(event.target.value)}
             placeholder="Search events or tags"
+            data-keyboard-focus="sidebar-search"
             className="app-input w-full rounded-xl px-4 py-3 text-[15px]"
           />
         </div>

@@ -26,32 +26,32 @@ const SELF_HDB_ENV_FIELD_DEFINITIONS = [
   },
   {
     key: 'DB_HOST',
-    label: 'Database host',
+    label: 'cPanel MySQL host',
     defaultValue: '127.0.0.1',
   },
   {
     key: 'DB_PORT',
-    label: 'Database port',
+    label: 'cPanel MySQL port',
     defaultValue: '3306',
   },
   {
     key: 'DB_NAME',
-    label: 'Database name',
+    label: 'cPanel MySQL database name',
     defaultValue: 'selfhdb',
   },
   {
     key: 'DB_USER',
-    label: 'Database user',
+    label: 'cPanel MySQL username',
     defaultValue: 'selfhdb_user',
   },
   {
     key: 'DB_PASSWORD',
-    label: 'Database password',
+    label: 'cPanel MySQL password',
     defaultValue: 'change-me',
   },
   {
     key: 'DB_CHARSET',
-    label: 'Database charset',
+    label: 'cPanel MySQL charset',
     defaultValue: 'utf8mb4',
   },
   {

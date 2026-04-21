@@ -49,6 +49,7 @@ export default function QuickEventPopover({
   connectedAccounts,
   providers,
   onConnectProvider,
+  onOpenConnectionSettings,
   oauthBusyProvider,
   oauthStatusMessage,
   onSubmit,
@@ -153,7 +154,7 @@ export default function QuickEventPopover({
   return (
     <section
       ref={setCombinedRef}
-      className={`quick-event-popover app-popover ${
+      className={`app-popover fixed z-[45] w-[min(640px,calc(100vw-32px))] max-h-[calc(100vh-32px)] overflow-visible rounded-3xl p-3.5 ${
         isDragging ? 'quick-event-popover--dragging' : ''
       }`}
       style={{
@@ -161,7 +162,7 @@ export default function QuickEventPopover({
         top: `${position.top}px`,
       }}
     >
-      <div className="quick-event-popover-header">
+      <div className="mb-2.5 flex items-center justify-between gap-3">
         <div
           className="quick-event-popover-drag"
           onPointerDown={handleDragStart}
@@ -174,16 +175,18 @@ export default function QuickEventPopover({
             <p className="settings-section-eyebrow">
               {mode === 'edit' ? 'Quick edit' : 'Quick create'}
             </p>
-            <h2 className="quick-event-popover-title">
+            <h2 className="m-0 text-[1.16rem] leading-none">
               {mode === 'edit' ? 'Update event' : 'Create event'}
             </h2>
           </div>
         </div>
-        <div className="quick-event-popover-header-actions">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            className={`app-button app-button--secondary ${
-              isNotificationOpen ? 'quick-event-popover-header-button--active' : ''
+            className={`app-button app-button--secondary px-[0.84rem] py-[0.52rem] text-[0.84rem] ${
+              isNotificationOpen
+                ? 'border-[var(--border-color-strong)] bg-[var(--interactive-active)]'
+                : ''
             }`}
             onClick={() => setIsNotificationOpen((current) => !current)}
           >
@@ -191,7 +194,7 @@ export default function QuickEventPopover({
           </button>
           <button
             type="button"
-            className="app-button app-button--secondary"
+            className="app-button app-button--secondary px-[0.84rem] py-[0.52rem] text-[0.84rem]"
             onClick={onClose}
           >
             Close
@@ -199,7 +202,7 @@ export default function QuickEventPopover({
         </div>
       </div>
 
-      <form className="quick-event-popover-form" onSubmit={onSubmit}>
+      <form className="grid gap-2.5" onSubmit={onSubmit}>
         <EventComposerFields
           draftEvent={draftEvent}
           onFieldChange={onFieldChange}
@@ -219,28 +222,29 @@ export default function QuickEventPopover({
           connectedAccounts={connectedAccounts}
           providers={providers}
           onConnectProvider={onConnectProvider}
+          onOpenConnectionSettings={onOpenConnectionSettings}
           oauthBusyProvider={oauthBusyProvider}
           oauthStatusMessage={oauthStatusMessage}
         />
 
-        <div className="quick-event-popover-actions">
+        <div className="static m-0 flex flex-wrap justify-end gap-2.5 bg-transparent p-0 backdrop-blur-none">
           <button
             type="button"
-            className="app-button app-button--secondary"
+            className="app-button app-button--secondary px-[0.88rem] py-[0.58rem] text-[0.9rem]"
             onClick={onOpenFullDetails}
           >
             More options
           </button>
           <button
             type="button"
-            className="app-button app-button--secondary"
+            className="app-button app-button--secondary px-[0.88rem] py-[0.58rem] text-[0.9rem]"
             onClick={onClose}
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="app-button app-button--primary"
+            className="app-button app-button--primary px-[0.88rem] py-[0.58rem] text-[0.9rem]"
           >
             {mode === 'edit' ? 'Save changes' : 'Create event'}
           </button>

@@ -167,6 +167,31 @@ final class Application
             Response::success($this->syncService->state($auth['user']['id'], $auth['device']['id']));
         });
 
+        $router->add('GET', '/v1/bundle/export', function (Request $request, array $_params): void {
+            $auth = $this->requireAuth($request);
+            Response::success($this->repository->exportBundle($auth['user']['id']));
+        });
+
+        $router->add('POST', '/v1/bundle/import', function (Request $request, array $_params): void {
+            $auth = $this->requireAuth($request);
+            $body = $request->json();
+            $result = $this->repository->importBundle(
+                $auth['user']['id'],
+                $auth['device']['id'],
+                is_array($body) ? $body : []
+            );
+            $this->repository->appendAuditLog(
+                $auth['user']['id'],
+                $auth['device']['id'],
+                'bundle_import',
+                'bundle',
+                'calendar-bundle-v1',
+                $request->ipAddress,
+                ['acceptedCount' => $result['acceptedCount']]
+            );
+            Response::success($result);
+        });
+
         $router->add('POST', '/v1/sync/bootstrap', function (Request $request, array $_params): void {
             $auth = $this->requireAuth($request);
             Response::success($this->syncService->bootstrap($auth['user']['id'], $auth['device']['id']));

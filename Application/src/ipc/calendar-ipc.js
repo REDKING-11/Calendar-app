@@ -6,6 +6,11 @@ function registerCalendarHandlers(store) {
     'calendar:createEvent',
     'calendar:updateEvent',
     'calendar:deleteEvent',
+    'calendar:listExternalCalendars',
+    'calendar:importExternalCalendar',
+    'calendar:refreshExternalSource',
+    'calendar:importData',
+    'calendar:exportData',
     'calendar:renameTag',
     'calendar:deleteTag',
     'calendar:getHolidayCountries',
@@ -13,6 +18,8 @@ function registerCalendarHandlers(store) {
     'calendar:importHolidays',
     'security:getSnapshot',
     'security:getProviders',
+    'security:getOAuthClientConfig',
+    'security:updateOAuthClientConfig',
     'security:listAccounts',
     'security:startOAuthConnect',
     'security:finishOAuthConnect',
@@ -22,6 +29,8 @@ function registerCalendarHandlers(store) {
     'security:createPairingApproval',
     'security:approvePairing',
     'security:revokeTrustedDevice',
+    'transport:createLocalSession',
+    'transport:consumeLocalSession',
     'hosted:getState',
     'hosted:testConnection',
     'hosted:register',
@@ -41,6 +50,17 @@ function registerCalendarHandlers(store) {
   ipcMain.handle('calendar:createEvent', (_event, input) => store.createEvent(input));
   ipcMain.handle('calendar:updateEvent', (_event, input) => store.updateEvent(input));
   ipcMain.handle('calendar:deleteEvent', (_event, eventId) => store.deleteEvent(eventId));
+  ipcMain.handle('calendar:listExternalCalendars', (_event, input) =>
+    store.listExternalCalendars(input || {})
+  );
+  ipcMain.handle('calendar:importExternalCalendar', (_event, input) =>
+    store.importExternalCalendar(input || {})
+  );
+  ipcMain.handle('calendar:refreshExternalSource', (_event, input) =>
+    store.refreshExternalSource(input || {})
+  );
+  ipcMain.handle('calendar:importData', (_event, input) => store.importData(input || {}));
+  ipcMain.handle('calendar:exportData', (_event, input) => store.exportData(input || {}));
   ipcMain.handle('calendar:renameTag', (_event, input) =>
     store.renameTagSystemWide(input?.tagId, input?.label)
   );
@@ -50,6 +70,10 @@ function registerCalendarHandlers(store) {
   ipcMain.handle('calendar:importHolidays', (_event, input) => store.importHolidays(input));
   ipcMain.handle('security:getSnapshot', () => store.getSecuritySnapshot());
   ipcMain.handle('security:getProviders', () => store.getAvailableProviders());
+  ipcMain.handle('security:getOAuthClientConfig', () => store.getOAuthClientConfig());
+  ipcMain.handle('security:updateOAuthClientConfig', (_event, input) =>
+    store.updateOAuthClientConfig(input || {})
+  );
   ipcMain.handle('security:listAccounts', () => store.listConnectedAccounts());
   ipcMain.handle('security:startOAuthConnect', (_event, provider, accessLevel) =>
     store.startOAuthConnect(provider, accessLevel)
@@ -70,6 +94,12 @@ function registerCalendarHandlers(store) {
   ipcMain.handle('security:approvePairing', (_event, input) => store.approvePairing(input));
   ipcMain.handle('security:revokeTrustedDevice', (_event, deviceId) =>
     store.revokeTrustedDevice(deviceId)
+  );
+  ipcMain.handle('transport:createLocalSession', (_event, input) =>
+    store.createLocalSession(input || {})
+  );
+  ipcMain.handle('transport:consumeLocalSession', (_event, input) =>
+    store.consumeLocalSession(input || {})
   );
   ipcMain.handle('hosted:getState', () => store.getHostedSyncState());
   ipcMain.handle('hosted:testConnection', (_event, baseUrl) => store.testHostedBackend(baseUrl));

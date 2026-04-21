@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ConnectedAccountsPanel from './ConnectedAccountsPanel';
 import {
   detectCountryCode,
   getCountryTimezones,
@@ -37,6 +38,16 @@ export default function Introduction({
   onCountryChange,
   preloadState = { status: 'idle', countryCode: '' },
   variant = 'panel',
+  connectedAccounts = [],
+  providers = [],
+  oauthClientConfig = {},
+  onConnectProvider,
+  onSaveOAuthClientConfig,
+  onDisconnectAccount,
+  onRevokeAccount,
+  oauthBusyProvider = '',
+  accountBusyId = '',
+  oauthStatusMessage = '',
 }) {
   const detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const detectedCountryCode = detectCountryCode();
@@ -345,7 +356,7 @@ export default function Introduction({
 
           <div className="grid gap-2">
             <label htmlFor="notificationEmail" className="text-sm font-medium app-text-muted">
-              Notification email
+              Reminder recipient email
             </label>
             <input
               type="email"
@@ -357,8 +368,24 @@ export default function Introduction({
               className="app-input rounded-xl px-4 py-3"
             />
             <p className="text-sm leading-6 app-text-soft">
-              Optional. Add one extra email that can receive calendar reminders later.
+              Optional. Add one extra email that can receive reminders. It is not used as a sender.
             </p>
+          </div>
+
+          <div className={isOnboarding ? 'xl:col-span-3 md:col-span-2' : 'md:col-span-4'}>
+            <ConnectedAccountsPanel
+              connectedAccounts={connectedAccounts}
+              providers={providers}
+              oauthClientConfig={oauthClientConfig}
+              onConnectProvider={onConnectProvider}
+              onSaveOAuthClientConfig={onSaveOAuthClientConfig}
+              onDisconnectAccount={onDisconnectAccount}
+              onRevokeAccount={onRevokeAccount}
+              oauthBusyProvider={oauthBusyProvider}
+              accountBusyId={accountBusyId}
+              oauthStatusMessage={oauthStatusMessage}
+              compact
+            />
           </div>
 
           <div

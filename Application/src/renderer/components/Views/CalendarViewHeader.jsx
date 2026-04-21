@@ -3,6 +3,7 @@ import React from 'react';
 const VIEW_OPTIONS = ['day', 'week', 'month', 'year'];
 
 export default function CalendarViewHeader({
+  headerRef,
   eyebrow,
   title,
   titleTone = 'compact',
@@ -17,9 +18,14 @@ export default function CalendarViewHeader({
   secondaryAction = null,
 }) {
   return (
-    <header className="calendar-header">
+    <header ref={headerRef} className="calendar-header" aria-label="Calendar header controls">
       <div className="calendar-nav-group">
-        <button type="button" className="calendar-header-button" onClick={onToday}>
+        <button
+          type="button"
+          className="calendar-header-button"
+          onClick={onToday}
+          data-keyboard-focus="calendar-header-primary"
+        >
           Today
         </button>
         <button

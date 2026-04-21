@@ -1,0 +1,728 @@
+Calendar App - Implementation Change Notes
+Date: 2026-04-21
+Format: plain text documentation summary
+
+This document records the main changes and additions made during this work pass.
+It is written as a project note rather than a Git diff. Generated build artifacts
+are mentioned separately from source changes.
+
+
+1. Build and installer changes
+------------------------------
+
+The app now has WiX MSI installer support for Windows.
+
+Main additions:
+- Added @electron-forge/maker-wix as a development dependency.
+- Added a WiX maker entry to Application/forge.config.js.
+- Set the WiX manufacturer to REDKING_11.
+- Set the WiX install folder name to RedFolder.
+- New MSI builds will use RedFolder as the application install directory.
+
+The package scripts were changed:
+- npm run make now uses the custom make wrapper and targets WiX by default.
+- npm run make:all runs the custom wrapper without forcing a target.
+- npm run make:forge preserves the direct electron-forge make command.
+
+A new build helper was added:
+- Application/scripts/make.js
+
+That helper:
+- detects WiX Toolset from common Windows install paths.
+- adds WiX candle/light tools to PATH when found.
+- creates fresh timestamped output folders by default.
+- avoids reusing old output folders that can contain locked app.asar files.
+- supports --targets, --arch, --platform, --out-dir, and --skip-package.
+
+The repository ignore file was updated:
+- Application/out/ is ignored.
+- Application/out-wix/ is ignored.
+
+
+2. Quick creator and full editor behavior
+-----------------------------------------
+
+The calendar creator was split into two modes:
+
+Quick popup:
+- Opens by default for fast create/edit.
+- Single click on an empty Day, Week, or Month slot opens quick create.
+- Single click on an existing event opens quick edit.
+- Uses a compact desktop-first layout.
+- Stays non-blocking above the calendar.
+- Can be dragged by its header.
+
+Full editor:
+- Opens for detailed editing.
+- Sidebar Create opens the full editor.
+- Double click on an empty slot opens the full editor.
+- Double click on an existing event opens the full editor.
+- More options from quick popup promotes the same draft into the full editor.
+
+The old large left drawer shell was replaced with a fullscreen inset modal:
+- fixed fullscreen wrapper.
+- blurred backdrop remains behind it.
+- large centered panel with margins.
+- sticky header.
+- scrollable body.
+- sticky footer.
+- Delete appears only in edit mode.
+- Escape closes it.
+- Overlay click closes it.
+
+Several interaction regressions were fixed:
+- hidden full editor surfaces no longer remain clickable when closed.
+- overlay z-index behavior was narrowed so popovers/drawers keep the intended positioning.
+- Month view click blocking was fixed by removing/constraining transparent hit layers.
+- Month header and view switcher remain clickable.
+- Month single and double click behavior works through bounded tile handlers.
+
+
+3. Quick popup layout changes
+-----------------------------
+
+The quick popup was made denser and more horizontal.
+
+It now contains only the fast fields:
+- title.
+- compact date.
+- start time.
+- end time.
+- duration chips.
+- availability status.
+- category color picker.
+- event scope.
+- low-emphasis type control.
+- Notifications button.
+- More options.
+- Cancel.
+- Create event or Save changes.
+
+Fields intentionally removed from the default quick body:
+- description.
+- location.
+- guests/people.
+- recurrence.
+- advanced metadata.
+- advanced provider controls.
+
+The quick date control was changed:
+- unfocused state shows a friendly date, such as Wednesday October 15.
+- focused state becomes a typed date input, such as 16.04.
+- it accepts day/month text instead of forcing the native date picker.
+- it keeps the current/fallback year unless a year is typed.
+
+The quick time controls were changed:
+- start and end are text inputs.
+- the visible style reads like a fused time range, for example 10:00-11:00.
+- typed input is supported.
+- dot syntax is normalized, for example 10.30 becomes 10:30.
+- arrow up/down changes focused time fields in small increments.
+
+Duration behavior was clarified:
+- clicking 30m, 1h, or 2h immediately recalculates the end time.
+- editing start time preserves duration by moving end time.
+- editing end time recalculates the duration.
+
+Find free slot was removed from quick mode for now.
+Overlap detection remains, but quick mode only shows the compact status.
+
+
+4. Full editor layout changes
+-----------------------------
+
+The full editor was reorganized to use its larger space better.
+
+The top/core area contains:
+- title.
+- timing.
+- category.
+- event scope.
+- event type.
+- invite through.
+- scheduling.
+
+Details and secondary fields were moved into a more balanced layout:
+- description.
+- location.
+- people/guests.
+- notifications.
+- metadata.
+- connected provider links.
+
+Scheduling and invite controls were moved leftward so the modal does not feel
+too heavy on the right side.
+
+Metadata was moved to the lower/right side and compacted:
+- group name.
+- deadline flag.
+- focus completion when relevant.
+- provider link metadata when present.
+
+
+5. Event model and draft changes
+--------------------------------
+
+The UI-facing event type model was simplified to:
+- meeting.
+- focus.
+- personal.
+
+Legacy type migration was added:
+- event becomes meeting.
+- task becomes focus.
+- appointment becomes personal.
+
+The UI-facing send/visibility concept was collapsed into scope:
+- Internal.
+- Work.
+- Personal.
+
+Scope maps to stored fields:
+- Internal -> syncPolicy internal_only, visibility private.
+- Work -> syncPolicy google_sync, visibility busy_only.
+- Personal -> syncPolicy microsoft_sync, visibility busy_only.
+
+Safe hydration rules were added:
+- stored private visibility hydrates to Internal first.
+- google_sync hydrates to Work when visibility is not private.
+- microsoft_sync hydrates to Personal when visibility is not private.
+- unknown combinations hydrate to Internal.
+
+The draft and payload model now includes:
+- location.
+- people.
+- sourceTimeZone.
+- reminderMinutesBeforeStart.
+- notifications.
+- desktopNotificationEnabled.
+- emailNotificationEnabled.
+- emailNotificationRecipients.
+- inviteRecipients.
+- inviteTargetAccountId.
+- inviteTargetProvider.
+- inviteTargetCalendarId.
+- inviteDeliveryMode.
+- lastInviteError.
+- externalProviderLinks.
+
+The same draft object is used by:
+- quick popup.
+- notification sidecar.
+- full editor.
+- save/update payload helpers.
+
+
+6. Notifications and reminders
+------------------------------
+
+Notifications were moved out of the quick popup body.
+
+Quick mode now has:
+- a Notifications button in the header.
+- a separate notification sidecar anchored beside the quick popup.
+- the sidecar follows while the popup is dragged.
+- the sidecar closes with the popup.
+
+Notification options now support multiple notifications per event.
+The user can add as many notification rows as they want.
+
+Each notification supports:
+- timing amount.
+- timing unit: minutes, hours, or days.
+- This machine toggle.
+- Email toggle.
+- email recipient selection.
+
+Example supported timing:
+- in 1 day.
+- in 2 hours.
+- in 15 minutes.
+
+The event content model stores:
+- notifications array.
+- reminderMinutesBeforeStart as legacy/primary compatibility field.
+- desktopNotificationEnabled as legacy/primary compatibility field.
+- emailNotificationEnabled as legacy/primary compatibility field.
+- emailNotificationRecipients as legacy/primary compatibility field.
+
+A dispatch log table was added so reminders do not send repeatedly:
+- reminder_dispatch_log.
+
+Reminder validation was added:
+- reminder values must be positive whole minutes after conversion.
+- reminder values have a maximum limit.
+- email notification recipients must be valid email addresses.
+- enabled email notifications require at least one recipient.
+- notification entries require at least one delivery channel.
+
+
+7. Google and Outlook account connections
+-----------------------------------------
+
+Google and Outlook connection management was added to onboarding and settings.
+
+New component:
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+
+The connected accounts panel supports:
+- Connect Google.
+- Connect Outlook.
+- Reconnect.
+- Disconnect.
+- Revoke.
+- showing connected accounts.
+- showing account email/display name.
+- showing provider.
+- showing connection status.
+- showing calendar write permission.
+- showing mail send permission.
+
+OAuth client setup was added:
+- Google client ID.
+- Google redirect URI.
+- Microsoft/Outlook client ID.
+- Microsoft redirect URI.
+
+The app now stores OAuth client config locally:
+- client IDs can come from env or local app setup.
+- redirect URIs can be customized.
+- client secrets are not requested.
+
+An OAuth tutorial popup was added:
+- explains how to find Google OAuth client IDs.
+- explains how to find Microsoft/Azure app client IDs.
+- explains redirect URI setup.
+- warns not to paste or share client secrets.
+- warns not to share tokens, auth codes, refresh tokens, or token-containing data.
+- explains that one Google client ID can connect multiple Google accounts.
+- explains that one Microsoft client ID can connect multiple Outlook accounts.
+
+Connect buttons in the event creator now route the user to Settings instead of
+trying to do complex setup inside the composer.
+
+
+8. Provider calendar import and invites
+---------------------------------------
+
+Google and Microsoft calendar listing was added.
+
+New calendar actions exposed through IPC/preload:
+- calendar:listExternalCalendars.
+- calendar:importExternalCalendar.
+- calendar:refreshExternalSource.
+
+External calendar import behavior:
+- first import creates normal local events.
+- imported events get external link rows.
+- refresh matches by remote IDs.
+- refresh updates still-linked events instead of duplicating.
+- local edits detach imported events so refresh does not overwrite them.
+- remote deletions/cancellations only affect still-linked imported events.
+
+Outbound invite support was added:
+- Work events use Google.
+- Personal events use Microsoft/Outlook.
+- Internal events stay local-only and do not send external invites.
+
+Invite behavior:
+- invite recipients are centralized in their own invite field.
+- people/guests can still contain names or emails.
+- valid emails from people can be used as invite candidates.
+- freeform names remain local display data.
+- sending provider invites requires non-Internal scope.
+- sending provider invites requires selected account and calendar.
+- saving with invites opens a confirmation step.
+
+Invite confirmation supports:
+- Send invites.
+- Save locally only.
+- Cancel.
+
+Provider event write support was added:
+- Google Calendar event create.
+- Google Calendar event patch/update.
+- Google Calendar event delete.
+- Microsoft Graph event create.
+- Microsoft Graph event patch/update.
+- Microsoft Graph event delete.
+
+Outbound provider links are stored separately from imported links:
+- imported links use imported mode.
+- outbound invite links use outbound mode.
+- local edits to outbound-linked events update the remote event.
+- local edits to imported events still detach.
+- local deletion of outbound-linked events attempts provider deletion/cancel.
+
+
+9. Local database and transport changes
+---------------------------------------
+
+The local SQLite schema was extended.
+
+Added or expanded local storage support for:
+- is_all_day on event metadata.
+- reminder dispatch logging.
+- external calendar sources.
+- external event links.
+- local transport sessions.
+- outbound/imported link modes.
+- provider push status fields.
+
+New local provider-aware tables include:
+- external_calendar_sources.
+- external_event_links.
+- local_transport_sessions.
+
+The canonical local event model remains:
+- event_metadata for queryable fields.
+- event_content for encrypted event payload.
+
+New event content fields include:
+- sourceTimeZone.
+- externalProviderLinks.
+- notification fields.
+- invite target fields.
+
+Local transport scaffolding was added:
+- create local session.
+- consume local session.
+- session token hashing.
+- expiry handling.
+- snapshot mode.
+- delta mode.
+- base sequence handling.
+
+The QR transfer concept stays small:
+- QR should carry only invite/session data.
+- calendar payload is not stored in the QR itself.
+
+
+10. Import and export formats
+-----------------------------
+
+A new interchange module was added:
+- Application/src/data/calendar-interchange.js
+
+Supported formats:
+- calendar-bundle-v1 JSON.
+- .ics calendar import/export.
+
+calendar-bundle-v1 is the lossless app/backend/phone format.
+It includes:
+- version.
+- exportedAt.
+- deviceId.
+- lastSequence.
+- events.
+- tags.
+- externalCalendarSources.
+- externalEventLinks.
+
+calendar-bundle-v1 excludes:
+- OAuth tokens.
+- refresh tokens.
+- vault secrets.
+- trusted-device private keys.
+
+.ics support is compatibility-focused and lossy.
+It maps:
+- title.
+- description.
+- location.
+- attendees.
+- recurrence.
+- start/end.
+- all-day state.
+- category/color best effort.
+
+New IPC/preload actions:
+- calendar:importData.
+- calendar:exportData.
+
+
+11. Backend changes
+-------------------
+
+SelfHdb backend support was extended for bundle import/export.
+
+New backend endpoints:
+- GET /v1/bundle/export.
+- POST /v1/bundle/import.
+
+Backend schema additions:
+- sync_envelopes.content_patch_json.
+- event_content.materialized_json.
+
+Runtime schema repair was added in the backend repository:
+- missing content_patch_json is added when needed.
+- missing materialized_json is added when needed.
+
+Backend event materialization now keeps materialized content for export.
+This allows backend bundle export without needing local OAuth tokens or secrets.
+
+Bundle import on the backend:
+- validates calendar-bundle-v1.
+- creates/updates local event envelopes.
+- materializes events.
+- appends an audit log entry.
+
+Provider credentials remain local-only.
+The backend does not store OAuth access or refresh tokens.
+
+
+12. Hosted/cPanel settings cleanup
+----------------------------------
+
+The old hosted connection/sign-in panel was removed from Settings.
+
+The settings panel now keeps only the server .env maker.
+
+The .env maker is described as:
+- cPanel / PHP backend.
+- Hosting .env maker.
+
+The copy now explains:
+- use cPanel MySQL host/name/user/password in the server .env file.
+- the desktop app does not connect directly to MySQL.
+- the .env belongs on the PHP backend server.
+
+The environment field labels were renamed:
+- cPanel MySQL host.
+- cPanel MySQL port.
+- cPanel MySQL database name.
+- cPanel MySQL username.
+- cPanel MySQL password.
+- cPanel MySQL charset.
+
+The sign-in language was removed to avoid confusing app account login with
+cPanel or database login.
+
+
+13. Onboarding and settings changes
+-----------------------------------
+
+Onboarding now includes:
+- name.
+- country.
+- timezone.
+- one optional reminder recipient email.
+- connected calendar accounts panel.
+
+Settings now includes:
+- reminder recipient email.
+- connected calendar accounts panel.
+- OAuth setup.
+- OAuth tutorial.
+- cPanel/PHP .env maker.
+
+The notification email is treated as:
+- one extra reminder recipient.
+- not a sender account.
+- not a cPanel login.
+- not a provider credential.
+
+Multiple Google accounts and multiple Outlook accounts can be connected.
+The same app OAuth client ID can be reused for multiple accounts.
+
+
+14. Keyboard navigation and accessibility
+-----------------------------------------
+
+A keyboard navigation helper module was added:
+- Application/src/renderer/keyboardNavigation.js
+
+Global region shortcuts were added:
+- Ctrl+1 focuses Sidebar.
+- Ctrl+2 focuses Header.
+- Ctrl+3 focuses the active calendar view.
+
+Shortcut safety:
+- shortcuts are ignored while typing in inputs.
+- shortcuts are ignored in textarea/select/contenteditable fields.
+- shortcuts are ignored behind blocking dialogs.
+
+Calendar keyboard behavior was added:
+- Month cells support roving focus and arrow navigation.
+- Week slots/events support keyboard targets.
+- Day slots/events support keyboard targets.
+- Year month cards support arrow navigation.
+
+Calendar activation keys:
+- Enter opens quick create/edit from focused calendar targets.
+- Ctrl+Enter opens full editor.
+- Shift+Enter also opens full editor in supported calendar targets.
+
+About now includes a keyboard shortcuts section listing active keys.
+
+Visible focus styling was added for:
+- calendar date buttons.
+- event pills.
+- week slots.
+- day slots.
+- year month cards.
+- view toggles.
+- app buttons and inputs.
+
+
+15. Visual and CSS changes
+--------------------------
+
+The stylesheet was partially deduplicated and tightened.
+
+Static layout and spacing were moved into Tailwind utility classes where useful.
+CSS was kept for:
+- theme variables.
+- theme-dependent colors.
+- complex calendar rendering.
+- overlays.
+- popover positioning.
+- focus states.
+- keyframes.
+- pseudo-elements.
+- responsive behavior that is clearer in CSS.
+
+Scrollbars were customized:
+- global fallback scrollbars.
+- sidebar scrollbars.
+- settings scrollbars.
+- about drawer scrollbars.
+
+The sidebar scrollbar was moved visually to the left side.
+
+The app background was upgraded:
+- existing app-background-layer was reused.
+- layered radial gradients were added.
+- slow orbital glow keyframes were added.
+- light theme uses blue/white glassy glow.
+- dark theme uses rose/red smoky glow.
+- reduced-motion users get animation disabled or softened.
+- pointer-events remain disabled so the background cannot block clicks.
+
+Overlay stacking was cleaned up:
+- event drawer/full modal stays fixed.
+- about drawer stays fixed.
+- quick popover stays above calendar but non-blocking.
+- calendar month grid cannot cover the header.
+- hidden overlay/modal surfaces do not capture clicks.
+
+
+16. Default data cleanup
+------------------------
+
+Non-holiday demo events were removed from new local stores.
+
+Old untouched demo seed events are cleaned up:
+- Local-first architecture review.
+- Phone sync UX sketch.
+- Pairing flow test.
+
+Holiday-related default/imported events remain supported.
+
+Holiday behavior was not removed.
+Only non-holiday sample/demo defaults were targeted.
+
+
+17. Tests and verification
+--------------------------
+
+npm test currently passes.
+
+The test runner now covers:
+- click intent helpers.
+- composer routing helpers.
+- keyboard navigation helpers.
+- event scope helpers.
+- reminder helpers and validation.
+- encrypted-at-rest behavior.
+- legacy migration.
+- event round-trip fields.
+- reminder round-trip.
+- master key rotation.
+- new stores starting without demo seed.
+- legacy demo seed cleanup.
+- hosted envelope projection.
+- external calendar import, refresh, and detach.
+- outbound provider invite flow.
+- bundle and ICS import/export.
+- local transport sessions.
+- OAuth client config persistence.
+- reminder service dispatch.
+
+
+18. Main source files touched
+-----------------------------
+
+Major app files:
+- Application/src/renderer/renderer.jsx
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/preferences.js
+- Application/src/renderer/keyboardNavigation.js
+- Application/src/renderer/styles.css
+
+Composer/UI files:
+- Application/src/renderer/components/QuickEventPopover.jsx
+- Application/src/renderer/components/EventComposerDrawer.jsx
+- Application/src/renderer/components/EventComposerFields.jsx
+- Application/src/renderer/components/NotificationSidecar.jsx
+- Application/src/renderer/components/NotificationSettingsFields.jsx
+
+Settings/onboarding/account files:
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+- Application/src/renderer/components/HostedSyncPanel.jsx
+- Application/src/shared/selfhdb-setup.js
+
+Calendar view files:
+- Application/src/renderer/components/CalendarViewport.jsx
+- Application/src/renderer/components/Views/CalendarViewHeader.jsx
+- Application/src/renderer/components/Views/MonthView.jsx
+- Application/src/renderer/components/Views/WeekView.jsx
+- Application/src/renderer/components/Views/DayView.jsx
+- Application/src/renderer/components/Views/YearView.jsx
+
+Storage/security/backend files:
+- Application/src/data/calendar-store.js
+- Application/src/data/calendar-interchange.js
+- Application/src/security/oauth-service.js
+- Application/src/security/validation.js
+- Application/src/ipc/calendar-ipc.js
+- Application/src/preload.js
+- SelfHdb/database/schema.sql
+- SelfHdb/src/Application.php
+- SelfHdb/src/Repository/BackendRepository.php
+
+Build/test files:
+- Application/package.json
+- Application/package-lock.json
+- Application/forge.config.js
+- Application/scripts/make.js
+- Application/test/run-security-tests.js
+- .gitignore
+
+
+19. Generated artifact note
+---------------------------
+
+The Git status currently reports deleted files under:
+- Application/.webpack/
+
+Those are generated build artifacts, not hand-written source files.
+They were affected by build/package output churn.
+
+Before committing, decide whether to:
+- leave them deleted if generated artifacts should not be tracked, or
+- regenerate/restore them if this repository intentionally tracks .webpack output.
+
+
+20. Current known status
+------------------------
+
+The latest lightweight verification completed successfully:
+- npm test passed.
+
+No SQL schema reset was required.
+No destructive git operation was performed.
+No provider tokens or secrets were added to docs or source.
+

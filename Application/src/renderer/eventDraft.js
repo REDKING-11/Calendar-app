@@ -19,6 +19,10 @@ export const REMINDER_UNIT_OPTIONS = [
   { id: 'hours', label: 'Hours' },
   { id: 'days', label: 'Days' },
 ];
+export const INVITE_DELIVERY_MODE_OPTIONS = [
+  { id: 'local_only', label: 'Save locally only' },
+  { id: 'provider_invite', label: 'Send calendar invites' },
+];
 
 const EVENT_TYPE_ALIASES = {
   event: 'meeting',
@@ -44,6 +48,14 @@ const REMINDER_UNIT_MULTIPLIERS = {
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAX_REMINDER_MINUTES = 365 * 24 * 60;
 export const DEFAULT_NOTIFICATION_REMINDER_MINUTES = 15;
+
+const INVITE_DELIVERY_MODE_ALIASES = {
+  local: 'local_only',
+  local_only: 'local_only',
+  provider: 'provider_invite',
+  invite: 'provider_invite',
+  provider_invite: 'provider_invite',
+};
 
 export function normalizeEventType(value = 'meeting') {
   const normalized = String(value || 'meeting').trim().toLowerCase();
@@ -172,6 +184,42 @@ export function normalizeNotificationRecipients(value = []) {
   });
 }
 
+export function normalizeInviteDeliveryMode(value = 'local_only') {
+  const normalized = String(value || 'local_only').trim().toLowerCase();
+  return INVITE_DELIVERY_MODE_ALIASES[normalized] || 'local_only';
+}
+
+export function scopeToInviteProvider(scope = 'internal') {
+  const normalizedScope = normalizeEventScope(scope);
+  if (normalizedScope === 'work') {
+    return 'google';
+  }
+  if (normalizedScope === 'personal') {
+    return 'microsoft';
+  }
+  return '';
+}
+
+export function normalizeInviteProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['google', 'microsoft'].includes(normalized) ? normalized : '';
+}
+
+export function extractInviteeEmails(value = []) {
+  const rawValues = Array.isArray(value) ? value : parsePeopleInput(value);
+  const seen = new Set();
+
+  return rawValues.flatMap((item) => {
+    const normalized = String(item || '').trim().toLowerCase();
+    if (!normalized || !EMAIL_PATTERN.test(normalized) || seen.has(normalized)) {
+      return [];
+    }
+
+    seen.add(normalized);
+    return [normalized];
+  });
+}
+
 function createNotificationId() {
   const randomPart =
     typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID
@@ -288,6 +336,10 @@ function parsePeopleInput(value = '') {
     .filter(Boolean);
 }
 
+function formatEmailListInput(value = []) {
+  return normalizeNotificationRecipients(value).join(', ');
+}
+
 function coerceMinutes(value, fallback = 60) {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
@@ -376,6 +428,7 @@ export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60, d
     description: '',
     location: '',
     peopleInput: '',
+    inviteRecipientsInput: formatEmailListInput(defaults.inviteRecipients || []),
     type: normalizeEventType(defaults.type || 'meeting'),
     scope: normalizeEventScope(defaults.scope || defaults.sendFrom || 'internal'),
     date: formatDateForInput(date),
@@ -397,6 +450,13 @@ export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60, d
     groupName: '',
     tags: [],
     externalProviderLinks: [],
+    inviteTargetAccountId: defaults.inviteTargetAccountId || '',
+    inviteTargetProvider: normalizeInviteProvider(
+      defaults.inviteTargetProvider || scopeToInviteProvider(defaults.scope || defaults.sendFrom)
+    ),
+    inviteTargetCalendarId: defaults.inviteTargetCalendarId || '',
+    inviteDeliveryMode: normalizeInviteDeliveryMode(defaults.inviteDeliveryMode),
+    lastInviteError: defaults.lastInviteError || '',
     showDescription: false,
     showLocation: false,
     showPeople: false,
@@ -407,12 +467,17 @@ export function createDraftEventFromEvent(event) {
   const startsAt = new Date(event.startsAt);
   const endsAt = new Date(event.endsAt);
   const people = Array.isArray(event.people) ? event.people : [];
+  const storedInviteRecipients = normalizeNotificationRecipients(event.inviteRecipients || []);
+  const fallbackGuestEmails = extractInviteeEmails(people);
+  const inviteRecipients =
+    storedInviteRecipients.length > 0 ? storedInviteRecipients : fallbackGuestEmails;
 
   return syncDraftNotificationFields({
     title: event.title || '',
     description: event.description || '',
     location: event.location || '',
     peopleInput: people.join(', '),
+    inviteRecipientsInput: inviteRecipients.join(', '),
     type: normalizeEventType(event.type || 'meeting'),
     date: formatDateForInput(startsAt),
     time: formatTimeForInput(startsAt),
@@ -448,6 +513,11 @@ export function createDraftEventFromEvent(event) {
     tags: (event.tags || []).map((tag) => ({ ...tag })),
     externalProviderLinks: (event.externalProviderLinks || []).map((link) => ({ ...link })),
     scope: resolveDraftScope(event.syncPolicy || 'internal_only', event.visibility || 'private'),
+    inviteTargetAccountId: event.inviteTargetAccountId || '',
+    inviteTargetProvider: normalizeInviteProvider(event.inviteTargetProvider),
+    inviteTargetCalendarId: event.inviteTargetCalendarId || '',
+    inviteDeliveryMode: normalizeInviteDeliveryMode(event.inviteDeliveryMode),
+    lastInviteError: event.lastInviteError || '',
     showDescription: Boolean(event.description?.trim()),
     showLocation: Boolean(event.location?.trim()),
     showPeople: people.length > 0,
@@ -474,6 +544,7 @@ export function buildEventPayloadFromDraft(draftEvent, fallbackDuration = 60) {
     groupName: draftEvent.groupName?.trim() || '',
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
+    inviteRecipients: extractInviteeEmails(draftEvent.inviteRecipientsInput),
     reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
     desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
     emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
@@ -483,6 +554,13 @@ export function buildEventPayloadFromDraft(draftEvent, fallbackDuration = 60) {
     tags: draftEvent.tags || [],
     syncPolicy: scopeToSyncPolicy(draftEvent.scope),
     visibility: scopeToVisibility(draftEvent.scope),
+    inviteTargetAccountId: String(draftEvent.inviteTargetAccountId || '').trim(),
+    inviteTargetProvider:
+      normalizeInviteProvider(draftEvent.inviteTargetProvider) ||
+      scopeToInviteProvider(draftEvent.scope),
+    inviteTargetCalendarId: String(draftEvent.inviteTargetCalendarId || '').trim(),
+    inviteDeliveryMode: normalizeInviteDeliveryMode(draftEvent.inviteDeliveryMode),
+    lastInviteError: String(draftEvent.lastInviteError || '').trim(),
     externalProviderLinks: draftEvent.externalProviderLinks || [],
   };
 }

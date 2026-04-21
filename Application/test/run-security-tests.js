@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const Module = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const { transformFileSync } = require('@babel/core');
 
@@ -44,6 +45,10 @@ const clickIntent = loadTranspiledModule(
 const composerRouting = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'composerRouting.js')
 );
+const keyboardNavigation = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'keyboardNavigation.js')
+);
+const calendarInterchange = require('../src/data/calendar-interchange');
 
 function createMockSafeStorage() {
   return {
@@ -211,6 +216,153 @@ function testComposerRoutingHelpers() {
       mode: 'edit',
       anchorPoint: null,
     }
+  );
+}
+
+function createMockFocusableElement({
+  tagName = 'BUTTON',
+  disabled = false,
+  hidden = false,
+  attributes = {},
+} = {}) {
+  return {
+    tagName,
+    disabled,
+    hidden,
+    tabIndex: attributes.tabindex === undefined ? 0 : Number(attributes.tabindex),
+    focused: false,
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : null;
+    },
+    matches(selector) {
+      if (selector === 'a[href]') {
+        return tagName === 'A' && Boolean(attributes.href);
+      }
+      if (selector === '[tabindex]') {
+        return Object.prototype.hasOwnProperty.call(attributes, 'tabindex');
+      }
+      return false;
+    },
+    focus() {
+      this.focused = true;
+    },
+  };
+}
+
+function testKeyboardNavigationHelpers() {
+  assert.equal(keyboardNavigation.isEditableTarget({ tagName: 'INPUT' }), true);
+  assert.equal(keyboardNavigation.isEditableTarget({ tagName: 'TEXTAREA' }), true);
+  assert.equal(keyboardNavigation.isEditableTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(keyboardNavigation.isEditableTarget({ tagName: 'BUTTON' }), false);
+  assert.equal(
+    keyboardNavigation.isEditableTarget({
+      tagName: 'SPAN',
+      closest(selector) {
+        return selector.includes('input') ? { tagName: 'INPUT' } : null;
+      },
+    }),
+    true
+  );
+
+  assert.equal(
+    keyboardNavigation.getRegionShortcutTarget({
+      ctrlKey: true,
+      key: '1',
+      target: { tagName: 'BODY' },
+    }),
+    'sidebar'
+  );
+  assert.equal(
+    keyboardNavigation.getRegionShortcutTarget({
+      ctrlKey: true,
+      key: '2',
+      target: { tagName: 'BODY' },
+    }),
+    'header'
+  );
+  assert.equal(
+    keyboardNavigation.getRegionShortcutTarget({
+      ctrlKey: true,
+      key: '3',
+      target: { tagName: 'BODY' },
+    }),
+    'view'
+  );
+  assert.equal(
+    keyboardNavigation.getRegionShortcutTarget({
+      ctrlKey: true,
+      key: '1',
+      target: { tagName: 'INPUT' },
+    }),
+    null
+  );
+  assert.equal(
+    keyboardNavigation.getRegionShortcutTarget({
+      ctrlKey: true,
+      shiftKey: true,
+      key: '1',
+      target: { tagName: 'BODY' },
+    }),
+    null
+  );
+
+  const disabledButton = createMockFocusableElement({ disabled: true });
+  const hiddenButton = createMockFocusableElement({ hidden: true });
+  const visibleButton = createMockFocusableElement();
+  const container = {
+    querySelectorAll() {
+      return [disabledButton, hiddenButton, visibleButton];
+    },
+  };
+
+  assert.deepEqual(keyboardNavigation.getFocusableElements(container), [visibleButton]);
+  assert.equal(keyboardNavigation.focusFirstAvailable(container), visibleButton);
+  assert.equal(visibleButton.focused, true);
+
+  assert.equal(
+    keyboardNavigation.getGridNavigationIndex({
+      currentIndex: 8,
+      itemCount: 35,
+      columnCount: 7,
+      key: 'ArrowLeft',
+    }),
+    7
+  );
+  assert.equal(
+    keyboardNavigation.getGridNavigationIndex({
+      currentIndex: 8,
+      itemCount: 35,
+      columnCount: 7,
+      key: 'ArrowDown',
+    }),
+    15
+  );
+  assert.equal(
+    keyboardNavigation.getGridNavigationIndex({
+      currentIndex: 8,
+      itemCount: 35,
+      columnCount: 7,
+      key: 'Home',
+    }),
+    7
+  );
+  assert.equal(
+    keyboardNavigation.getGridNavigationIndex({
+      currentIndex: 8,
+      itemCount: 35,
+      columnCount: 7,
+      key: 'End',
+    }),
+    13
+  );
+  assert.equal(
+    keyboardNavigation.getGridNavigationIndex({
+      currentIndex: 0,
+      itemCount: 35,
+      columnCount: 7,
+      key: 'ArrowUp',
+    }),
+    0
   );
 }
 
@@ -887,21 +1039,70 @@ function testKeyRotation() {
   }
 }
 
-function testHostedBootstrapClearsDemoSeed() {
-  const fixture = createStoreFixture('calendar-store-hosted-bootstrap-');
+function testNewStoreStartsWithoutDemoSeed() {
+  const fixture = createStoreFixture('calendar-store-no-demo-seed-');
 
   try {
-    const before = fixture.store.snapshot();
-    assert.equal(before.events.length > 0, true);
-    assert.equal(before.changes.length > 0, true);
-
-    fixture.store.prepareHostedBootstrap();
-
-    const after = fixture.store.snapshot();
-    assert.equal(after.events.length, 0);
-    assert.equal(after.changes.length, 0);
+    const snapshot = fixture.store.snapshot();
+    assert.equal(snapshot.events.length, 0);
+    assert.equal(snapshot.changes.length, 0);
+    assert.equal(fixture.store.getDemoSeedState(), 'disabled');
   } finally {
     fixture.cleanup();
+  }
+}
+
+function testLegacyDemoSeedCleanup() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'calendar-store-demo-cleanup-'));
+  let store = new CalendarStore(tempDir, {
+    safeStorage: createMockSafeStorage(),
+    shell: { openExternal() {} },
+  });
+
+  try {
+    for (const title of [
+      'Local-first architecture review',
+      'Phone sync UX sketch',
+      'Pairing flow test',
+    ]) {
+      store.createEvent({
+        title,
+        description: 'Old generated demo event',
+        type: 'meeting',
+        startsAt: '2026-04-16T09:00:00.000Z',
+        endsAt: '2026-04-16T10:00:00.000Z',
+        color: '#4f9d69',
+        tags: [],
+      });
+    }
+
+    store.createEvent({
+      title: 'Real user event',
+      description: 'Must stay in the calendar.',
+      type: 'personal',
+      startsAt: '2026-04-17T09:00:00.000Z',
+      endsAt: '2026-04-17T10:00:00.000Z',
+      color: '#4d8cf5',
+      tags: [],
+    });
+    store.setMeta('demoSeedState', 'seeded');
+    store.close();
+    store = null;
+
+    store = new CalendarStore(tempDir, {
+      safeStorage: createMockSafeStorage(),
+      shell: { openExternal() {} },
+    });
+
+    const snapshot = store.snapshot();
+    assert.equal(snapshot.events.some((event) => event.title === 'Local-first architecture review'), false);
+    assert.equal(snapshot.events.some((event) => event.title === 'Phone sync UX sketch'), false);
+    assert.equal(snapshot.events.some((event) => event.title === 'Pairing flow test'), false);
+    assert.equal(snapshot.events.some((event) => event.title === 'Real user event'), true);
+    assert.equal(store.getDemoSeedState(), 'disabled');
+  } finally {
+    store?.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -934,6 +1135,7 @@ function testHostedEnvelopeProjection() {
       visibility: 'busy_only',
       startsAt: '2026-04-16T13:00:00.000Z',
       endsAt: '2026-04-16T14:00:00.000Z',
+      sourceTimeZone: 'Europe/Helsinki',
       color: '#4f9d69',
       tags: [{ label: 'Hosted', color: '#1d4ed8' }],
     });
@@ -941,8 +1143,10 @@ function testHostedEnvelopeProjection() {
     const envelopes = sourceFixture.store.listHostedSyncEnvelopesSince(0);
     assert.equal(envelopes.length, 1);
     assert.equal(envelopes[0].contentPatch.title, 'Hosted sync secret');
+    assert.equal(envelopes[0].contentPatch.sourceTimeZone, 'Europe/Helsinki');
     assert.equal(envelopes[0].contentPatch.location, 'Hosted room');
     assert.deepEqual(envelopes[0].contentPatch.people, ['Casey', 'Morgan']);
+    assert.equal(typeof envelopes[0].encryptedContent, 'string');
     assert.equal(envelopes[0].contentPatch.desktopNotificationEnabled, true);
     assert.equal(envelopes[0].contentPatch.emailNotificationEnabled, false);
     assert.deepEqual(envelopes[0].contentPatch.emailNotificationRecipients, []);
@@ -959,6 +1163,7 @@ function testHostedEnvelopeProjection() {
     assert.equal(targetSnapshot.events[0].type, 'meeting');
     assert.equal(targetSnapshot.events[0].location, 'Hosted room');
     assert.deepEqual(targetSnapshot.events[0].people, ['Casey', 'Morgan']);
+    assert.equal(targetSnapshot.events[0].sourceTimeZone, 'Europe/Helsinki');
     assert.equal(targetSnapshot.events[0].reminderMinutesBeforeStart, 15);
     assert.equal(targetSnapshot.events[0].desktopNotificationEnabled, true);
     assert.equal(targetSnapshot.events[0].emailNotificationEnabled, false);
@@ -1078,10 +1283,571 @@ async function testReminderServiceDispatch() {
   }
 }
 
+async function testOutboundProviderInviteFlow() {
+  const fixture = createStoreFixture('calendar-store-outbound-invites-');
+  const calls = [];
+
+  try {
+    const account = {
+      accountId: 'acct_google_work',
+      provider: 'google',
+      email: 'work@example.com',
+      displayName: 'Work',
+      status: 'connected',
+      canWrite: true,
+      writeScopeGranted: true,
+      mailScopeGranted: true,
+      emailSendCapable: true,
+    };
+    const microsoftAccount = {
+      accountId: 'acct_microsoft_personal',
+      provider: 'microsoft',
+      email: 'personal@example.com',
+      displayName: 'Personal',
+      status: 'connected',
+      canWrite: true,
+      writeScopeGranted: true,
+      mailScopeGranted: true,
+      emailSendCapable: true,
+    };
+    const calendar = {
+      accountId: account.accountId,
+      provider: 'google',
+      remoteCalendarId: 'primary',
+      displayName: 'Primary',
+      selected: true,
+      accessRole: 'owner',
+    };
+    const microsoftCalendar = {
+      accountId: microsoftAccount.accountId,
+      provider: 'microsoft',
+      remoteCalendarId: 'calendar-personal',
+      displayName: 'Personal Calendar',
+      selected: true,
+      accessRole: 'writer',
+    };
+
+    fixture.store.oauthService.listConnectedAccounts = () => [account, microsoftAccount];
+    fixture.store.oauthService.listExternalCalendars = async (accountId) => {
+      if (accountId === microsoftAccount.accountId) {
+        return [microsoftCalendar];
+      }
+      assert.equal(accountId, account.accountId);
+      return [calendar];
+    };
+    fixture.store.oauthService.createOutboundCalendarEvent = async (input) => {
+      calls.push({ kind: 'create', input });
+      if (input.accountId === microsoftAccount.accountId) {
+        assert.deepEqual(input.attendees, ['casey@example.com']);
+        assert.equal(input.remoteCalendarId, microsoftCalendar.remoteCalendarId);
+        return {
+          accountId: microsoftAccount.accountId,
+          provider: 'microsoft',
+          remoteCalendarId: microsoftCalendar.remoteCalendarId,
+          remoteEventId: 'microsoft_event_1',
+          remoteVersion: 'm1',
+          url: 'https://outlook.office.com/calendar/item/1',
+        };
+      }
+      assert.deepEqual(input.attendees, ['alex@example.com']);
+      assert.equal(input.accountId, account.accountId);
+      assert.equal(input.remoteCalendarId, calendar.remoteCalendarId);
+      return {
+        accountId: account.accountId,
+        provider: 'google',
+        remoteCalendarId: calendar.remoteCalendarId,
+        remoteEventId: 'google_event_1',
+        remoteVersion: 'v1',
+        url: 'https://calendar.google.com/event?eid=1',
+      };
+    };
+    fixture.store.oauthService.updateOutboundCalendarEvent = async (input) => {
+      calls.push({ kind: 'update', input });
+      assert.equal(input.remoteEventId, 'google_event_1');
+      assert.deepEqual(input.attendees, ['alex@example.com']);
+      return {
+        accountId: account.accountId,
+        provider: 'google',
+        remoteCalendarId: calendar.remoteCalendarId,
+        remoteEventId: 'google_event_1',
+        remoteVersion: 'v2',
+        url: 'https://calendar.google.com/event?eid=1',
+      };
+    };
+    fixture.store.oauthService.deleteOutboundCalendarEvent = async (input) => {
+      calls.push({ kind: 'delete', input });
+      assert.equal(input.remoteEventId, 'google_event_1');
+      return { provider: 'google', remoteEventId: 'google_event_1' };
+    };
+
+    const createdSnapshot = await fixture.store.createEvent({
+      title: 'Provider invite',
+      description: 'Send through Google Calendar',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      groupName: '',
+      location: 'Room A',
+      people: ['Alex'],
+      inviteRecipients: ['alex@example.com'],
+      startsAt: '2026-04-22T09:00:00.000Z',
+      endsAt: '2026-04-22T10:00:00.000Z',
+      color: '#4f9d69',
+      syncPolicy: 'google_sync',
+      visibility: 'busy_only',
+      inviteTargetAccountId: account.accountId,
+      inviteTargetProvider: 'google',
+      inviteTargetCalendarId: calendar.remoteCalendarId,
+      inviteDeliveryMode: 'provider_invite',
+    });
+
+    assert.equal(calls[0].kind, 'create');
+    const createdEvent = createdSnapshot.events.find((event) => event.title === 'Provider invite');
+    assert.equal(createdEvent.inviteDeliveryMode, 'provider_invite');
+    assert.equal(createdEvent.inviteTargetAccountId, account.accountId);
+    assert.equal(createdEvent.externalProviderLinks[0].mode, 'outbound');
+    assert.equal(createdEvent.externalProviderLinks[0].externalEventId, 'google_event_1');
+
+    const createdLinks = fixture.store.listExternalEventLinks({
+      eventId: createdEvent.id,
+      linkMode: 'outbound',
+      syncStatus: 'active',
+    });
+    assert.equal(createdLinks.length, 1);
+    assert.equal(createdLinks[0].remoteEventId, 'google_event_1');
+    assert.equal(createdLinks[0].linkMode, 'outbound');
+
+    const updatedSnapshot = await fixture.store.updateEvent({
+      id: createdEvent.id,
+      title: 'Provider invite updated',
+      inviteDeliveryMode: 'provider_invite',
+      inviteTargetAccountId: account.accountId,
+      inviteTargetProvider: 'google',
+      inviteTargetCalendarId: calendar.remoteCalendarId,
+    });
+    assert.equal(calls.some((call) => call.kind === 'update'), true);
+    const updatedEvent = updatedSnapshot.events.find((event) => event.id === createdEvent.id);
+    assert.equal(updatedEvent.title, 'Provider invite updated');
+    assert.equal(updatedEvent.externalProviderLinks[0].externalEventId, 'google_event_1');
+
+    await fixture.store.deleteEvent(createdEvent.id);
+    assert.equal(calls.some((call) => call.kind === 'delete'), true);
+    const removedLinks = fixture.store.listExternalEventLinks({
+      eventId: createdEvent.id,
+      linkMode: 'outbound',
+    });
+    assert.equal(removedLinks[0].syncStatus, 'removed');
+
+    const personalSnapshot = await fixture.store.createEvent({
+      title: 'Personal invite',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      people: ['Casey Example'],
+      inviteRecipients: ['casey@example.com'],
+      startsAt: '2026-04-23T09:00:00.000Z',
+      endsAt: '2026-04-23T10:00:00.000Z',
+      color: '#4d8cf5',
+      syncPolicy: 'microsoft_sync',
+      visibility: 'busy_only',
+      inviteTargetAccountId: microsoftAccount.accountId,
+      inviteTargetProvider: 'microsoft',
+      inviteTargetCalendarId: microsoftCalendar.remoteCalendarId,
+      inviteDeliveryMode: 'provider_invite',
+    });
+    assert.equal(calls.some((call) => call.input.accountId === microsoftAccount.accountId), true);
+    const personalEvent = personalSnapshot.events.find((event) => event.title === 'Personal invite');
+    assert.equal(personalEvent.externalProviderLinks[0].provider, 'microsoft');
+    assert.equal(personalEvent.externalProviderLinks[0].mode, 'outbound');
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+async function testExternalCalendarImportRefreshAndDetach() {
+  const fixture = createStoreFixture('calendar-store-external-import-');
+
+  try {
+    fixture.store.prepareHostedBootstrap();
+
+    let remoteEvents = [
+      {
+        provider: 'google',
+        remoteCalendarId: 'remote_cal_1',
+        remoteEventId: 'remote_a',
+        remoteVersion: 'v1',
+        remoteDeleted: false,
+        title: 'Imported A',
+        description: 'First imported event',
+        location: 'Remote room A',
+        people: ['a@example.com'],
+        type: 'meeting',
+        completed: false,
+        repeat: 'none',
+        hasDeadline: false,
+        groupName: '',
+        startsAt: '2026-04-16T09:00:00.000Z',
+        endsAt: '2026-04-16T10:00:00.000Z',
+        isAllDay: false,
+        sourceTimeZone: 'Europe/Helsinki',
+        color: '#4f9d69',
+        tags: [],
+        syncPolicy: 'internal_only',
+        visibility: 'private',
+        externalProviderLinks: [{ provider: 'google', externalEventId: 'remote_a', url: '' }],
+      },
+      {
+        provider: 'google',
+        remoteCalendarId: 'remote_cal_1',
+        remoteEventId: 'remote_b',
+        remoteVersion: 'v1',
+        remoteDeleted: false,
+        title: 'Imported B',
+        description: 'Second imported event',
+        location: 'Remote room B',
+        people: ['b@example.com'],
+        type: 'meeting',
+        completed: false,
+        repeat: 'weekly',
+        hasDeadline: false,
+        groupName: '',
+        startsAt: '2026-04-17T00:00:00.000Z',
+        endsAt: '2026-04-18T00:00:00.000Z',
+        isAllDay: true,
+        sourceTimeZone: 'Europe/Helsinki',
+        color: '#4d8cf5',
+        tags: [],
+        syncPolicy: 'internal_only',
+        visibility: 'private',
+        externalProviderLinks: [{ provider: 'google', externalEventId: 'remote_b', url: '' }],
+      },
+    ];
+
+    fixture.store.oauthService.listExternalCalendars = async () => [
+      {
+        accountId: 'acct_google',
+        provider: 'google',
+        remoteCalendarId: 'remote_cal_1',
+        displayName: 'Work',
+        selected: true,
+        color: '#4f9d69',
+        timeZone: 'Europe/Helsinki',
+      },
+    ];
+    fixture.store.oauthService.listExternalEvents = async () => ({
+      provider: 'google',
+      remoteCalendarId: 'remote_cal_1',
+      events: remoteEvents,
+      syncCursor: null,
+    });
+
+    let result = await fixture.store.importExternalCalendar({
+      accountId: 'acct_google',
+      remoteCalendarId: 'remote_cal_1',
+    });
+    assert.equal(result.createdCount, 2);
+    assert.equal(result.snapshot.events.length, 2);
+    assert.equal(result.snapshot.externalCalendarSources.length, 1);
+    assert.equal(result.snapshot.externalEventLinks.length, 2);
+    assert.equal(result.snapshot.events.find((event) => event.title === 'Imported B')?.isAllDay, true);
+    assert.equal(
+      result.snapshot.events.find((event) => event.title === 'Imported A')?.sourceTimeZone,
+      'Europe/Helsinki'
+    );
+
+    const importedA = result.snapshot.events.find((event) => event.title === 'Imported A');
+    const importedB = result.snapshot.events.find((event) => event.title === 'Imported B');
+    fixture.store.updateEvent({
+      id: importedA.id,
+      title: 'Locally detached A',
+    });
+
+    remoteEvents = [
+      {
+        ...remoteEvents[0],
+        remoteVersion: 'v2',
+        title: 'Remote overwrite should not win',
+      },
+    ];
+
+    result = await fixture.store.refreshExternalSource({
+      sourceId: result.source.sourceId,
+    });
+
+    const latestSnapshot = result.snapshot;
+    assert.equal(
+      latestSnapshot.events.find((event) => event.id === importedA.id)?.title,
+      'Locally detached A'
+    );
+    assert.equal(
+      latestSnapshot.externalEventLinks.find((link) => link.eventId === importedA.id)?.syncStatus,
+      'detached'
+    );
+
+    assert.equal(fixture.store.getEventById(importedB.id)?.deleted, true);
+    assert.equal(
+      latestSnapshot.externalEventLinks.find((link) => link.eventId === importedB.id)?.syncStatus,
+      'removed'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+function testBundleAndIcsImportExport() {
+  const sourceFixture = createStoreFixture('calendar-store-bundle-source-');
+  const targetFixture = createStoreFixture('calendar-store-bundle-target-');
+  const icsFixture = createStoreFixture('calendar-store-ics-target-');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'calendar-store-transfer-'));
+
+  try {
+    sourceFixture.store.prepareHostedBootstrap();
+    sourceFixture.store.importCalendarBundle({
+      version: 'calendar-bundle-v1',
+      exportedAt: new Date('2026-04-16T08:00:00.000Z').toISOString(),
+      deviceId: 'device_source',
+      lastSequence: 0,
+      tags: [{ id: 'tag_bundle', label: 'Bundle', color: '#1d4ed8' }],
+      externalCalendarSources: [
+        {
+          sourceId: 'source_google',
+          accountId: 'acct_google',
+          provider: 'google',
+          remoteCalendarId: 'google_cal',
+          displayName: 'Google import',
+          selected: true,
+          syncCursor: null,
+        },
+      ],
+      externalEventLinks: [
+        {
+          eventId: 'event_bundle',
+          sourceId: 'source_google',
+          provider: 'google',
+          remoteCalendarId: 'google_cal',
+          remoteEventId: 'google_event_1',
+          remoteVersion: 'etag_1',
+          syncStatus: 'active',
+          lastSeenRemoteAt: '2026-04-16T08:00:00.000Z',
+          importedAt: '2026-04-16T08:00:00.000Z',
+          updatedAt: '2026-04-16T08:00:00.000Z',
+        },
+      ],
+      events: [
+        {
+          id: 'event_bundle',
+          title: 'Bundle event',
+          description: 'Round-trip bundle content',
+          type: 'focus',
+          completed: false,
+          repeat: 'weekly',
+          hasDeadline: false,
+          groupName: '',
+          location: 'Bundle room',
+          people: ['bundle@example.com'],
+          sourceTimeZone: 'Europe/Helsinki',
+          startsAt: '2026-04-16T09:00:00.000Z',
+          endsAt: '2026-04-17T09:00:00.000Z',
+          isAllDay: true,
+          reminderMinutesBeforeStart: 30,
+          desktopNotificationEnabled: true,
+          emailNotificationEnabled: false,
+          emailNotificationRecipients: [],
+          notifications: [
+            createNotificationInput('bundle_primary', {
+              reminderMinutesBeforeStart: 30,
+              desktopNotificationEnabled: true,
+            }),
+          ],
+          color: '#4f9d69',
+          tags: [{ id: 'tag_bundle', label: 'Bundle', color: '#1d4ed8' }],
+          syncPolicy: 'google_sync',
+          visibility: 'busy_only',
+          externalProviderLinks: [
+            { provider: 'google', externalEventId: 'google_event_1', url: 'https://example.com/a' },
+          ],
+        },
+      ],
+    });
+
+    const bundlePath = path.join(tempDir, 'calendar-export.json');
+    const icsPath = path.join(tempDir, 'calendar-export.ics');
+
+    const exportedBundle = sourceFixture.store.exportData({
+      format: 'json',
+      path: bundlePath,
+    });
+    assert.equal(exportedBundle.format, 'json');
+
+    const bundle = calendarInterchange.parseCalendarBundleText(fs.readFileSync(bundlePath, 'utf8'));
+    assert.equal(bundle.events.length, 1);
+    assert.equal(bundle.externalCalendarSources.length, 1);
+    assert.equal(bundle.externalEventLinks.length, 1);
+    assert.equal(bundle.events[0].isAllDay, true);
+    assert.equal(bundle.events[0].sourceTimeZone, 'Europe/Helsinki');
+
+    const importedBundle = targetFixture.store.importData({
+      format: 'json',
+      path: bundlePath,
+    });
+    assert.equal(importedBundle.importedCount, 1);
+    assert.equal(importedBundle.snapshot.events[0].title, 'Bundle event');
+    assert.equal(importedBundle.snapshot.events[0].isAllDay, true);
+    assert.equal(importedBundle.snapshot.events[0].sourceTimeZone, 'Europe/Helsinki');
+    assert.equal(importedBundle.snapshot.externalCalendarSources.length, 1);
+    assert.equal(importedBundle.snapshot.externalEventLinks.length, 1);
+
+    sourceFixture.store.exportData({
+      format: 'ics',
+      path: icsPath,
+    });
+    const importedIcs = icsFixture.store.importData({
+      format: 'ics',
+      path: icsPath,
+    });
+    assert.equal(importedIcs.importedCount >= 1, true);
+    assert.equal(importedIcs.snapshot.events.some((event) => event.title === 'Bundle event'), true);
+  } finally {
+    sourceFixture.cleanup();
+    targetFixture.cleanup();
+    icsFixture.cleanup();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function testLocalTransportSession() {
+  const fixture = createStoreFixture('calendar-store-transport-');
+
+  try {
+    fixture.store.prepareHostedBootstrap();
+    fixture.store.createEvent({
+      title: 'Transport event',
+      type: 'meeting',
+      startsAt: '2026-04-16T09:00:00.000Z',
+      endsAt: '2026-04-16T10:00:00.000Z',
+      color: '#4f9d69',
+    });
+
+    const session = fixture.store.createLocalSession({
+      mode: 'snapshot',
+      scope: 'all',
+    });
+
+    assert.equal(session.invite.version, 'local-transport-invite-v1');
+    assert.equal(Boolean(session.invite.bundleGzipBase64), false);
+
+    const consumed = fixture.store.consumeLocalSession({
+      sessionId: session.sessionId,
+      token: session.invite.token,
+      device: { id: 'phone_1', name: 'Phone' },
+    });
+
+    assert.equal(consumed.payload.mode, 'snapshot');
+    const bundleJson = zlib
+      .gunzipSync(Buffer.from(consumed.payload.bundleGzipBase64, 'base64'))
+      .toString('utf8');
+    const bundle = calendarInterchange.parseCalendarBundleText(bundleJson);
+    assert.equal(bundle.events.length, 1);
+    assert.equal(bundle.events[0].title, 'Transport event');
+
+    assert.throws(
+      () =>
+        fixture.store.consumeLocalSession({
+          sessionId: session.sessionId,
+          token: session.invite.token,
+        }),
+      /already closed/
+    );
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+function testOAuthClientConfigPersistence() {
+  const previousGoogleClientId = process.env.CALENDAR_GOOGLE_CLIENT_ID;
+  const previousGoogleRedirectUri = process.env.CALENDAR_GOOGLE_REDIRECT_URI;
+  const previousMicrosoftClientId = process.env.CALENDAR_MICROSOFT_CLIENT_ID;
+  const previousMicrosoftRedirectUri = process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
+  delete process.env.CALENDAR_GOOGLE_CLIENT_ID;
+  delete process.env.CALENDAR_GOOGLE_REDIRECT_URI;
+  delete process.env.CALENDAR_MICROSOFT_CLIENT_ID;
+  delete process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
+
+  const fixture = createStoreFixture('calendar-store-oauth-config-');
+
+  try {
+    const initialSecurity = fixture.store.getSecuritySnapshot();
+    assert.equal(initialSecurity.auth.clientConfig.google.clientIdConfigured, false);
+    assert.equal(initialSecurity.auth.clientConfig.microsoft.clientIdConfigured, false);
+    assert.equal(
+      fixture.store.getAvailableProviders().find((provider) => provider.id === 'google').configured,
+      false
+    );
+
+    const updated = fixture.store.updateOAuthClientConfig({
+      google: {
+        clientId: 'google-client-id.apps.googleusercontent.com',
+        redirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
+      },
+      microsoft: {
+        clientId: '00000000-0000-0000-0000-000000000000',
+        redirectUri: 'http://localhost:45782/oauth/microsoft/callback',
+      },
+    });
+
+    assert.equal(updated.security.auth.clientConfig.google.clientIdConfigured, true);
+    assert.equal(updated.security.auth.clientConfig.google.clientIdSource, 'settings');
+    assert.equal(updated.security.auth.clientConfig.microsoft.clientIdConfigured, true);
+    assert.equal(
+      fixture.store.getAvailableProviders().find((provider) => provider.id === 'google').configured,
+      true
+    );
+    assert.equal(
+      fixture.store.getAvailableProviders().find((provider) => provider.id === 'microsoft').configured,
+      true
+    );
+
+    assert.throws(
+      () =>
+        fixture.store.updateOAuthClientConfig({
+          google: {
+            redirectUri: 'https://example.com/oauth/callback',
+          },
+        }),
+      /localhost HTTP URL/
+    );
+  } finally {
+    fixture.cleanup();
+    if (previousGoogleClientId === undefined) {
+      delete process.env.CALENDAR_GOOGLE_CLIENT_ID;
+    } else {
+      process.env.CALENDAR_GOOGLE_CLIENT_ID = previousGoogleClientId;
+    }
+    if (previousGoogleRedirectUri === undefined) {
+      delete process.env.CALENDAR_GOOGLE_REDIRECT_URI;
+    } else {
+      process.env.CALENDAR_GOOGLE_REDIRECT_URI = previousGoogleRedirectUri;
+    }
+    if (previousMicrosoftClientId === undefined) {
+      delete process.env.CALENDAR_MICROSOFT_CLIENT_ID;
+    } else {
+      process.env.CALENDAR_MICROSOFT_CLIENT_ID = previousMicrosoftClientId;
+    }
+    if (previousMicrosoftRedirectUri === undefined) {
+      delete process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
+    } else {
+      process.env.CALENDAR_MICROSOFT_REDIRECT_URI = previousMicrosoftRedirectUri;
+    }
+  }
+}
+
 async function main() {
   const checks = [
     ['click_intent_helpers', testClickIntentHelpers],
     ['composer_routing_helpers', testComposerRoutingHelpers],
+    ['keyboard_navigation_helpers', testKeyboardNavigationHelpers],
     ['event_scope_helpers', testEventScopeHelpers],
     ['reminder_helpers_and_validation', testReminderHelpersAndValidation],
     ['encrypted_at_rest', testEncryptedAtRest],
@@ -1089,8 +1855,14 @@ async function main() {
     ['event_roundtrip_fields', testEventRoundTripFields],
     ['reminder_roundtrip', testReminderRoundTrip],
     ['master_key_rotation', testKeyRotation],
-    ['hosted_bootstrap_clears_demo_seed', testHostedBootstrapClearsDemoSeed],
+    ['new_store_starts_without_demo_seed', testNewStoreStartsWithoutDemoSeed],
+    ['legacy_demo_seed_cleanup', testLegacyDemoSeedCleanup],
     ['hosted_envelope_projection', testHostedEnvelopeProjection],
+    ['external_calendar_import_refresh_and_detach', testExternalCalendarImportRefreshAndDetach],
+    ['outbound_provider_invite_flow', testOutboundProviderInviteFlow],
+    ['bundle_and_ics_import_export', testBundleAndIcsImportExport],
+    ['local_transport_session', testLocalTransportSession],
+    ['oauth_client_config_persistence', testOAuthClientConfigPersistence],
     ['reminder_service_dispatch', testReminderServiceDispatch],
   ];
 

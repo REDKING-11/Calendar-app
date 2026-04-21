@@ -11,6 +11,32 @@ final class BackendRepository
 {
     public function __construct(private readonly PDO $pdo)
     {
+        $this->ensureRuntimeSchema();
+    }
+
+    private function ensureRuntimeSchema(): void
+    {
+        $this->ensureColumn(
+            'sync_envelopes',
+            'content_patch_json',
+            'ALTER TABLE sync_envelopes ADD COLUMN content_patch_json LONGTEXT NULL'
+        );
+        $this->ensureColumn(
+            'event_content',
+            'materialized_json',
+            'ALTER TABLE event_content ADD COLUMN materialized_json LONGTEXT NULL'
+        );
+    }
+
+    private function ensureColumn(string $tableName, string $columnName, string $alterSql): void
+    {
+        $stmt = $this->pdo->prepare(sprintf('SHOW COLUMNS FROM %s LIKE :column_name', $tableName));
+        $stmt->execute(['column_name' => $columnName]);
+        if ($stmt->fetch()) {
+            return;
+        }
+
+        $this->pdo->exec($alterSql);
     }
 
     public function transaction(callable $callback): mixed
@@ -334,9 +360,9 @@ final class BackendRepository
         $id = Str::uuid();
         $stmt = $this->pdo->prepare(
             'INSERT INTO sync_envelopes
-             (id, user_id, device_id, device_sequence, entity, entity_id, operation, metadata_patch_json, encrypted_content_patch, nonce, client_timestamp, created_at)
+             (id, user_id, device_id, device_sequence, entity, entity_id, operation, metadata_patch_json, content_patch_json, encrypted_content_patch, nonce, client_timestamp, created_at)
              VALUES
-             (:id, :user_id, :device_id, :device_sequence, :entity, :entity_id, :operation, :metadata_patch_json, :encrypted_content_patch, :nonce, :client_timestamp, :created_at)'
+             (:id, :user_id, :device_id, :device_sequence, :entity, :entity_id, :operation, :metadata_patch_json, :content_patch_json, :encrypted_content_patch, :nonce, :client_timestamp, :created_at)'
         );
         $stmt->execute([
             'id' => $id,
@@ -347,6 +373,7 @@ final class BackendRepository
             'entity_id' => (string) $envelope['entityId'],
             'operation' => (string) $envelope['operation'],
             'metadata_patch_json' => json_encode($envelope['metadataPatch'] ?? []),
+            'content_patch_json' => isset($envelope['contentPatch']) ? json_encode($envelope['contentPatch']) : null,
             'encrypted_content_patch' => $this->extractEncryptedContent($envelope),
             'nonce' => (string) $envelope['nonce'],
             'client_timestamp' => $this->normalizeClientTimestamp($envelope['clientTimestamp'] ?? null),
@@ -362,7 +389,7 @@ final class BackendRepository
     {
         $stmt = $this->pdo->prepare(
             'SELECT server_sequence, device_id, device_sequence, entity, entity_id, operation,
-                    metadata_patch_json, encrypted_content_patch, nonce, client_timestamp, created_at
+                    metadata_patch_json, content_patch_json, encrypted_content_patch, nonce, client_timestamp, created_at
              FROM sync_envelopes
              WHERE user_id = :user_id AND server_sequence > :cursor
              ORDER BY server_sequence ASC
@@ -382,6 +409,7 @@ final class BackendRepository
                 'entityId' => $row['entity_id'],
                 'operation' => $row['operation'],
                 'metadataPatch' => json_decode((string) $row['metadata_patch_json'], true) ?: [],
+                'contentPatch' => json_decode((string) ($row['content_patch_json'] ?? ''), true) ?: null,
                 'encryptedContent' => $row['encrypted_content_patch'],
                 'nonce' => $row['nonce'],
                 'clientTimestamp' => $row['client_timestamp'],
@@ -397,6 +425,7 @@ final class BackendRepository
         }
 
         $metadata = is_array($envelope['metadataPatch'] ?? null) ? $envelope['metadataPatch'] : [];
+        $contentPatch = is_array($envelope['contentPatch'] ?? null) ? $envelope['contentPatch'] : [];
         $eventId = (string) $envelope['entityId'];
         $now = Str::now();
         $existing = $this->findEventMetadata($eventId);
@@ -454,21 +483,40 @@ final class BackendRepository
         }
         $stmt->execute($record);
 
-        if ($encryptedContent !== null) {
-            if ($this->findEventContent($eventId)) {
+        if ($encryptedContent !== null || $contentPatch !== []) {
+            $existingContent = $this->findEventContent($eventId);
+            $materializedContent = array_merge(
+                $this->decodeMaterializedJson((string) ($existingContent['materialized_json'] ?? '')),
+                $contentPatch,
+                [
+                    'type' => (string) ($metadata['type'] ?? $contentPatch['type'] ?? 'meeting'),
+                    'completed' => !empty($metadata['completed']) || !empty($contentPatch['completed']),
+                    'repeat' => (string) ($metadata['repeat'] ?? $contentPatch['repeat'] ?? 'none'),
+                    'hasDeadline' => !empty($metadata['hasDeadline']) || !empty($contentPatch['hasDeadline']),
+                    'color' => (string) ($metadata['color'] ?? $contentPatch['color'] ?? '#4f9d69'),
+                ]
+            );
+
+            if ($existingContent) {
                 $stmt = $this->pdo->prepare(
-                    'UPDATE event_content SET encrypted_payload = :encrypted_payload, key_version = :key_version, updated_at = :updated_at WHERE event_id = :event_id'
+                    'UPDATE event_content
+                     SET encrypted_payload = :encrypted_payload,
+                         materialized_json = :materialized_json,
+                         key_version = :key_version,
+                         updated_at = :updated_at
+                     WHERE event_id = :event_id'
                 );
             } else {
                 $stmt = $this->pdo->prepare(
-                    'INSERT INTO event_content (event_id, encrypted_payload, key_version, updated_at)
-                     VALUES (:event_id, :encrypted_payload, :key_version, :updated_at)'
+                    'INSERT INTO event_content (event_id, encrypted_payload, materialized_json, key_version, updated_at)
+                     VALUES (:event_id, :encrypted_payload, :materialized_json, :key_version, :updated_at)'
                 );
             }
 
             $stmt->execute([
                 'event_id' => $eventId,
-                'encrypted_payload' => $encryptedContent,
+                'encrypted_payload' => $encryptedContent ?? '{}',
+                'materialized_json' => json_encode($materializedContent),
                 'key_version' => (int) ($metadata['keyVersion'] ?? 1),
                 'updated_at' => $now,
             ]);
@@ -494,6 +542,163 @@ final class BackendRepository
         ]);
     }
 
+    public function getMaxDeviceSequence(string $deviceId): int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT COALESCE(MAX(device_sequence), 0) AS max_sequence
+             FROM sync_envelopes
+             WHERE device_id = :device_id'
+        );
+        $stmt->execute(['device_id' => $deviceId]);
+        return (int) (($stmt->fetch()['max_sequence'] ?? 0));
+    }
+
+    public function exportBundle(string $userId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT
+                m.id,
+                m.starts_at,
+                m.ends_at,
+                m.is_all_day,
+                m.visibility,
+                m.status,
+                m.sync_policy,
+                c.materialized_json
+             FROM events_metadata m
+             LEFT JOIN event_content c ON c.event_id = m.id
+             WHERE m.user_id = :user_id AND m.deleted_at IS NULL
+             ORDER BY m.starts_at ASC'
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $rows = $stmt->fetchAll();
+
+        $events = [];
+        $tagMap = [];
+        foreach ($rows as $row) {
+            $content = $this->decodeMaterializedJson((string) ($row['materialized_json'] ?? ''));
+            $event = [
+                'id' => $row['id'],
+                'title' => (string) ($content['title'] ?? 'Imported event'),
+                'description' => (string) ($content['description'] ?? ''),
+                'type' => (string) ($content['type'] ?? 'meeting'),
+                'completed' => !empty($content['completed']),
+                'repeat' => (string) ($content['repeat'] ?? 'none'),
+                'hasDeadline' => !empty($content['hasDeadline']),
+                'groupName' => (string) ($content['groupName'] ?? ''),
+                'location' => (string) ($content['location'] ?? ''),
+                'people' => is_array($content['people'] ?? null) ? $content['people'] : [],
+                'sourceTimeZone' => (string) ($content['sourceTimeZone'] ?? ''),
+                'startsAt' => $this->normalizeDatabaseTimestamp((string) $row['starts_at']),
+                'endsAt' => $this->normalizeDatabaseTimestamp((string) $row['ends_at']),
+                'isAllDay' => !empty($row['is_all_day']),
+                'reminderMinutesBeforeStart' => $content['reminderMinutesBeforeStart'] ?? null,
+                'desktopNotificationEnabled' => !empty($content['desktopNotificationEnabled']),
+                'emailNotificationEnabled' => !empty($content['emailNotificationEnabled']),
+                'emailNotificationRecipients' =>
+                    is_array($content['emailNotificationRecipients'] ?? null)
+                        ? $content['emailNotificationRecipients']
+                        : [],
+                'notifications' => is_array($content['notifications'] ?? null) ? $content['notifications'] : [],
+                'color' => (string) ($content['color'] ?? '#4f9d69'),
+                'tags' => is_array($content['tags'] ?? null) ? $content['tags'] : [],
+                'syncPolicy' => (string) ($row['sync_policy'] ?? 'internal_only'),
+                'visibility' => (string) ($row['visibility'] ?? 'private'),
+                'externalProviderLinks' =>
+                    is_array($content['externalProviderLinks'] ?? null)
+                        ? $content['externalProviderLinks']
+                        : [],
+            ];
+            $events[] = $event;
+
+            foreach ($event['tags'] as $tag) {
+                $label = strtolower(trim((string) ($tag['label'] ?? '')));
+                if ($label === '') {
+                    continue;
+                }
+                $tagMap[$label] = $tag;
+            }
+        }
+
+        return [
+            'version' => 'calendar-bundle-v1',
+            'exportedAt' => gmdate(DATE_ATOM),
+            'deviceId' => null,
+            'lastSequence' => $this->getCurrentServerSequence($userId),
+            'events' => $events,
+            'tags' => array_values($tagMap),
+            'externalCalendarSources' => [],
+            'externalEventLinks' => [],
+        ];
+    }
+
+    public function importBundle(string $userId, string $deviceId, array $bundle): array
+    {
+        if (($bundle['version'] ?? '') !== 'calendar-bundle-v1') {
+            throw new \RuntimeException('Unsupported calendar bundle version.');
+        }
+
+        $calendar = $this->ensureDefaultCalendar($userId, 'UTC');
+        $acceptedCount = 0;
+        $deviceSequence = $this->getMaxDeviceSequence($deviceId);
+
+        $this->transaction(function () use ($userId, $deviceId, $bundle, $calendar, &$acceptedCount, &$deviceSequence): void {
+            foreach (($bundle['events'] ?? []) as $event) {
+                $deviceSequence += 1;
+                $contentPatch = [
+                    'title' => (string) ($event['title'] ?? 'Imported event'),
+                    'description' => (string) ($event['description'] ?? ''),
+                    'groupName' => (string) ($event['groupName'] ?? ''),
+                    'location' => (string) ($event['location'] ?? ''),
+                    'people' => is_array($event['people'] ?? null) ? $event['people'] : [],
+                    'sourceTimeZone' => (string) ($event['sourceTimeZone'] ?? ''),
+                    'reminderMinutesBeforeStart' => $event['reminderMinutesBeforeStart'] ?? null,
+                    'desktopNotificationEnabled' => !empty($event['desktopNotificationEnabled']),
+                    'emailNotificationEnabled' => !empty($event['emailNotificationEnabled']),
+                    'emailNotificationRecipients' =>
+                        is_array($event['emailNotificationRecipients'] ?? null)
+                            ? $event['emailNotificationRecipients']
+                            : [],
+                    'notifications' => is_array($event['notifications'] ?? null) ? $event['notifications'] : [],
+                    'tags' => is_array($event['tags'] ?? null) ? $event['tags'] : [],
+                    'externalProviderLinks' =>
+                        is_array($event['externalProviderLinks'] ?? null)
+                            ? $event['externalProviderLinks']
+                            : [],
+                ];
+
+                $envelope = [
+                    'deviceId' => $deviceId,
+                    'deviceSequence' => $deviceSequence,
+                    'entity' => 'event',
+                    'entityId' => (string) ($event['id'] ?? Str::uuid()),
+                    'operation' => 'update',
+                    'metadataPatch' => [
+                        'calendarId' => $calendar['id'],
+                        'startsAt' => (string) ($event['startsAt'] ?? gmdate(DATE_ATOM)),
+                        'endsAt' => (string) ($event['endsAt'] ?? gmdate(DATE_ATOM)),
+                        'isAllDay' => !empty($event['isAllDay']),
+                        'visibility' => (string) ($event['visibility'] ?? 'private'),
+                        'status' => 'confirmed',
+                        'syncPolicy' => (string) ($event['syncPolicy'] ?? 'internal_only'),
+                    ],
+                    'contentPatch' => $contentPatch,
+                    'nonce' => Str::randomToken(12),
+                    'clientTimestamp' => gmdate(DATE_ATOM),
+                ];
+
+                $this->insertEnvelope($userId, $deviceId, $envelope);
+                $this->materializeEnvelope($userId, $deviceId, $calendar['id'], $envelope);
+                $acceptedCount += 1;
+            }
+        });
+
+        return [
+            'acceptedCount' => $acceptedCount,
+            'latestServerCursor' => $this->getCurrentServerSequence($userId),
+        ];
+    }
+
     private function findEventMetadata(string $eventId): ?array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM events_metadata WHERE id = :id LIMIT 1');
@@ -510,6 +715,16 @@ final class BackendRepository
         return $row ?: null;
     }
 
+    private function decodeMaterializedJson(string $value): array
+    {
+        if ($value === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
     private function normalizeClientTimestamp(?string $value): string
     {
         if ($value === null || $value === '') {
@@ -520,6 +735,15 @@ final class BackendRepository
             return (new \DateTimeImmutable($value))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
         } catch (\Throwable) {
             return Str::now();
+        }
+    }
+
+    private function normalizeDatabaseTimestamp(string $value): string
+    {
+        try {
+            return (new \DateTimeImmutable($value, new \DateTimeZone('UTC')))->format(DATE_ATOM);
+        } catch (\Throwable) {
+            return gmdate(DATE_ATOM);
         }
     }
 

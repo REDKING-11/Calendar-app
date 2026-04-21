@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS sync_envelopes (
   entity_id CHAR(64) NOT NULL,
   operation VARCHAR(16) NOT NULL,
   metadata_patch_json JSON NOT NULL,
+  content_patch_json LONGTEXT NULL,
   encrypted_content_patch LONGTEXT NULL,
   nonce VARCHAR(128) NOT NULL,
   client_timestamp DATETIME(6) NOT NULL,
@@ -139,6 +140,7 @@ CREATE TABLE IF NOT EXISTS events_metadata (
 CREATE TABLE IF NOT EXISTS event_content (
   event_id CHAR(64) PRIMARY KEY,
   encrypted_payload LONGTEXT NOT NULL,
+  materialized_json LONGTEXT NULL,
   key_version INT NOT NULL DEFAULT 1,
   updated_at DATETIME(6) NOT NULL,
   CONSTRAINT fk_event_content_event FOREIGN KEY (event_id) REFERENCES events_metadata(id) ON DELETE CASCADE

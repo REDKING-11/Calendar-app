@@ -2,9 +2,18 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { DatabaseSync } = require('node:sqlite');
 
 const { HolidayService } = require('./holiday-service');
+const {
+  CALENDAR_BUNDLE_VERSION,
+  buildCalendarBundle,
+  serializeCalendarBundle,
+  parseCalendarBundleText,
+  parseIcsText,
+  serializeEventsToIcs,
+} = require('./calendar-interchange');
 const { CryptoService, CIPHER_VERSION } = require('../security/crypto-service');
 const { HostedSyncService } = require('../security/hosted-sync-service');
 const { OAuthService } = require('../security/oauth-service');
@@ -27,6 +36,83 @@ const HOLIDAY_TAG_COLOR = '#b91c1c';
 const COUNTRY_TAG_COLOR = '#2563eb';
 const HOLIDAY_EVENT_COLOR = '#dc2626';
 const HOLIDAY_DESCRIPTION_MARKER = '[default-public-holiday]';
+const LEGACY_DEMO_EVENT_TITLES = new Set([
+  'Local-first architecture review',
+  'Phone sync UX sketch',
+  'Pairing flow test',
+]);
+const CURRENT_SCHEMA_VERSION = 7;
+const LOCAL_TRANSPORT_SESSION_TTL_MS = 10 * 60 * 1000;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+function normalizeSourceLinkStatus(value = 'active') {
+  const normalized = String(value || 'active').trim().toLowerCase();
+  return ['active', 'detached', 'removed'].includes(normalized) ? normalized : 'active';
+}
+
+function normalizeExternalLinkMode(value = 'imported') {
+  const normalized = String(value || 'imported').trim().toLowerCase();
+  return ['imported', 'outbound'].includes(normalized) ? normalized : 'imported';
+}
+
+function normalizeInviteDeliveryMode(value = 'local_only') {
+  const normalized = String(value || 'local_only').trim().toLowerCase();
+  return ['local_only', 'provider_invite'].includes(normalized) ? normalized : 'local_only';
+}
+
+function normalizeInviteProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['google', 'microsoft'].includes(normalized) ? normalized : '';
+}
+
+function resolveInviteProviderFromEvent(event = {}) {
+  const explicitProvider = normalizeInviteProvider(event.inviteTargetProvider);
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  if (event.syncPolicy === 'google_sync') {
+    return 'google';
+  }
+
+  if (event.syncPolicy === 'microsoft_sync') {
+    return 'microsoft';
+  }
+
+  return '';
+}
+
+function extractInviteeEmails(people = []) {
+  const rawPeople = Array.isArray(people)
+    ? people
+    : String(people || '')
+        .split(/[\n,;]+/g)
+        .map((item) => item.trim());
+  const seen = new Set();
+
+  return rawPeople.flatMap((person) => {
+    const normalized = String(person || '').trim().toLowerCase();
+    if (!normalized || !EMAIL_PATTERN.test(normalized) || seen.has(normalized)) {
+      return [];
+    }
+
+    seen.add(normalized);
+    return [normalized];
+  });
+}
+
+function normalizeTransportMode(value = 'snapshot') {
+  const normalized = String(value || 'snapshot').trim().toLowerCase();
+  return ['snapshot', 'delta'].includes(normalized) ? normalized : 'snapshot';
+}
+
+function cloneScopeValue(scope = 'all') {
+  if (scope && typeof scope === 'object' && !Array.isArray(scope)) {
+    return JSON.parse(JSON.stringify(scope));
+  }
+
+  return scope ?? 'all';
+}
 
 function createId(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -85,64 +171,6 @@ function dedupeTagsByLabel(tags = []) {
     seen.add(key);
     return true;
   });
-}
-
-function buildDemoEvents() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const day = today.getDate();
-
-  return [
-    {
-      title: 'Local-first architecture review',
-      description: 'Walk through the sync model, local data ownership, and next implementation risks.',
-      type: 'meeting',
-      completed: false,
-      repeat: 'none',
-      hasDeadline: false,
-      groupName: '',
-      location: 'Studio A',
-      people: ['Product', 'Engineering'],
-      startsAt: new Date(year, month, day, 10, 0, 0, 0).toISOString(),
-      endsAt: new Date(year, month, day, 11, 0, 0, 0).toISOString(),
-      color: '#4f9d69',
-      tags: [
-        { id: createId('tag'), label: 'Architecture', color: '#1d4ed8' },
-        { id: createId('tag'), label: 'Review', color: '#9a3412' },
-      ],
-    },
-    {
-      title: 'Phone sync UX sketch',
-      description: 'Map the pairing flow and identify where mobile editing should stay intentionally lightweight.',
-      type: 'personal',
-      completed: false,
-      repeat: 'none',
-      hasDeadline: false,
-      groupName: '',
-      location: 'Cafe drafting corner',
-      people: ['Alex'],
-      startsAt: new Date(year, month, day + 1, 14, 0, 0, 0).toISOString(),
-      endsAt: new Date(year, month, day + 1, 15, 0, 0, 0).toISOString(),
-      color: '#4d8cf5',
-      tags: [{ id: createId('tag'), label: 'UX', color: '#7c3aed' }],
-    },
-    {
-      title: 'Pairing flow test',
-      description: 'Run through QR-based pairing and confirm the basic LAN sync handoff works.',
-      type: 'focus',
-      completed: false,
-      repeat: 'weekly',
-      hasDeadline: true,
-      groupName: 'Launch prep',
-      location: '',
-      people: [],
-      startsAt: new Date(year, month, day + 3, 9, 30, 0, 0).toISOString(),
-      endsAt: new Date(year, month, day + 3, 10, 0, 0, 0).toISOString(),
-      color: '#e3a13b',
-      tags: [{ id: createId('tag'), label: 'Testing', color: '#be123c' }],
-    },
-  ];
 }
 
 function parseLegacyTagLabel(label) {
@@ -365,6 +393,7 @@ class CalendarStore {
         has_deadline INTEGER NOT NULL DEFAULT 0,
         starts_at TEXT NOT NULL,
         ends_at TEXT NOT NULL,
+        is_all_day INTEGER NOT NULL DEFAULT 0,
         color TEXT NOT NULL,
         sync_policy TEXT NOT NULL DEFAULT 'internal_only',
         visibility TEXT NOT NULL DEFAULT 'private',
@@ -486,13 +515,59 @@ class CalendarStore {
         created_at TEXT NOT NULL,
         UNIQUE(event_id, channel, recipient, reminder_at)
       );
+
+      CREATE TABLE IF NOT EXISTS external_calendar_sources (
+        source_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        remote_calendar_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        selected INTEGER NOT NULL DEFAULT 1,
+        sync_cursor_cipher_text TEXT,
+        last_synced_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(account_id, provider, remote_calendar_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS external_event_links (
+        event_id TEXT NOT NULL REFERENCES event_metadata(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES external_calendar_sources(source_id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        remote_calendar_id TEXT NOT NULL,
+        remote_event_id TEXT NOT NULL,
+        remote_version TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'active',
+        link_mode TEXT NOT NULL DEFAULT 'imported',
+        last_seen_remote_at TEXT,
+        last_push_error TEXT,
+        last_pushed_at TEXT,
+        imported_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (event_id, source_id),
+        UNIQUE(source_id, remote_event_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS local_transport_sessions (
+        session_id TEXT PRIMARY KEY,
+        approval_id TEXT,
+        session_token_hash TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        scope_json TEXT NOT NULL DEFAULT '"all"',
+        base_sequence INTEGER NOT NULL DEFAULT 0,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        closed_at TEXT
+      );
     `);
   }
 
   bootstrap() {
-    const schemaVersion = Number(this.ensureMeta('schemaVersion', '4'));
-    if (!Number.isFinite(schemaVersion) || schemaVersion < 5) {
-      this.setMeta('schemaVersion', '5');
+    this.runSchemaMigrations();
+    const schemaVersion = Number(this.ensureMeta('schemaVersion', String(CURRENT_SCHEMA_VERSION)));
+    if (!Number.isFinite(schemaVersion) || schemaVersion < CURRENT_SCHEMA_VERSION) {
+      this.setMeta('schemaVersion', String(CURRENT_SCHEMA_VERSION));
     }
     this.ensureMeta('lastSequence', '0');
     this.ensureMeta('contentCipherVersion', String(CIPHER_VERSION));
@@ -512,19 +587,157 @@ class CalendarStore {
       });
     }
 
+    if (this.getDemoSeedState() === 'seeded') {
+      this.removeLegacyDemoSeedEvents();
+    }
+
     if (this.countEvents() === 0) {
       if (fs.existsSync(this.legacyJsonPath)) {
         this.migrateLegacyJsonStore();
       } else {
-        for (const eventInput of buildDemoEvents()) {
-          this.insertEventRecord(sanitizeEventCreateInput(eventInput), {
-            deviceId: this.deviceId,
-          });
-        }
-        this.setMeta('demoSeedState', 'seeded');
+        this.setMeta('demoSeedState', 'disabled');
       }
     } else if (!this.getMeta('demoSeedState')) {
       this.setMeta('demoSeedState', 'disabled');
+    }
+  }
+
+  hasColumn(tableName, columnName) {
+    const columns = this.db.prepare(`PRAGMA table_info(${tableName})`).all();
+    return columns.some((column) => String(column?.name || '').toLowerCase() === columnName.toLowerCase());
+  }
+
+  rebuildExternalProviderTablesForInviteLinks() {
+    const hasLinkMode = this.hasColumn('external_event_links', 'link_mode');
+    const hasLastPushError = this.hasColumn('external_event_links', 'last_push_error');
+    const hasLastPushedAt = this.hasColumn('external_event_links', 'last_pushed_at');
+    const linkModeSelect = hasLinkMode
+      ? `CASE
+          WHEN link_mode IS NULL OR link_mode = '' THEN 'imported'
+          ELSE link_mode
+        END`
+      : `'imported'`;
+    const lastPushErrorSelect = hasLastPushError ? 'last_push_error' : 'NULL';
+    const lastPushedAtSelect = hasLastPushedAt ? 'last_pushed_at' : 'NULL';
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS external_calendar_sources_next (
+        source_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        remote_calendar_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        selected INTEGER NOT NULL DEFAULT 1,
+        sync_cursor_cipher_text TEXT,
+        last_synced_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(account_id, provider, remote_calendar_id)
+      );
+
+      INSERT OR IGNORE INTO external_calendar_sources_next (
+        source_id,
+        account_id,
+        provider,
+        remote_calendar_id,
+        display_name,
+        selected,
+        sync_cursor_cipher_text,
+        last_synced_at,
+        last_error,
+        created_at,
+        updated_at
+      )
+      SELECT
+        source_id,
+        account_id,
+        provider,
+        remote_calendar_id,
+        display_name,
+        selected,
+        sync_cursor_cipher_text,
+        last_synced_at,
+        last_error,
+        created_at,
+        updated_at
+      FROM external_calendar_sources;
+
+      CREATE TABLE IF NOT EXISTS external_event_links_next (
+        event_id TEXT NOT NULL REFERENCES event_metadata(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES external_calendar_sources(source_id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        remote_calendar_id TEXT NOT NULL,
+        remote_event_id TEXT NOT NULL,
+        remote_version TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'active',
+        link_mode TEXT NOT NULL DEFAULT 'imported',
+        last_seen_remote_at TEXT,
+        last_push_error TEXT,
+        last_pushed_at TEXT,
+        imported_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (event_id, source_id),
+        UNIQUE(source_id, remote_event_id)
+      );
+
+      INSERT OR IGNORE INTO external_event_links_next (
+        event_id,
+        source_id,
+        provider,
+        remote_calendar_id,
+        remote_event_id,
+        remote_version,
+        sync_status,
+        link_mode,
+        last_seen_remote_at,
+        last_push_error,
+        last_pushed_at,
+        imported_at,
+        updated_at
+      )
+      SELECT
+        event_id,
+        source_id,
+        provider,
+        remote_calendar_id,
+        remote_event_id,
+        remote_version,
+        sync_status,
+        ${linkModeSelect},
+        last_seen_remote_at,
+        ${lastPushErrorSelect},
+        ${lastPushedAtSelect},
+        imported_at,
+        updated_at
+      FROM external_event_links;
+
+      DROP TABLE external_event_links;
+      DROP TABLE external_calendar_sources;
+      ALTER TABLE external_calendar_sources_next RENAME TO external_calendar_sources;
+      ALTER TABLE external_event_links_next RENAME TO external_event_links;
+    `);
+  }
+
+  runSchemaMigrations() {
+    if (!this.hasColumn('event_metadata', 'is_all_day')) {
+      this.db.exec(`ALTER TABLE event_metadata ADD COLUMN is_all_day INTEGER NOT NULL DEFAULT 0;`);
+    }
+
+    if (!this.hasColumn('local_transport_sessions', 'scope_json')) {
+      this.db.exec(
+        `ALTER TABLE local_transport_sessions ADD COLUMN scope_json TEXT NOT NULL DEFAULT '"all"';`
+      );
+    }
+
+    const currentSchemaVersion = Number(this.getMeta('schemaVersion') || '0');
+    if (
+      currentSchemaVersion < 7 ||
+      !this.hasColumn('external_event_links', 'link_mode') ||
+      !this.hasColumn('external_event_links', 'last_push_error') ||
+      !this.hasColumn('external_event_links', 'last_pushed_at')
+    ) {
+      this.rebuildExternalProviderTablesForInviteLinks();
     }
   }
 
@@ -623,12 +836,62 @@ class CalendarStore {
     }
   }
 
+  isLegacyDemoSeedEvent(event) {
+    return (
+      LEGACY_DEMO_EVENT_TITLES.has(String(event?.title || '')) &&
+      !String(event?.description || '').includes(HOLIDAY_DESCRIPTION_MARKER)
+    );
+  }
+
+  removeLegacyDemoSeedEvents() {
+    const demoEventIds = this.listEvents(true)
+      .filter((event) => this.isLegacyDemoSeedEvent(event))
+      .map((event) => event.id);
+
+    if (demoEventIds.length === 0) {
+      this.setMeta('demoSeedState', 'disabled');
+      return 0;
+    }
+
+    const removingAllEvents = demoEventIds.length === this.countEvents();
+
+    this.withTransaction(() => {
+      for (const eventId of demoEventIds) {
+        this.db.prepare('DELETE FROM reminder_dispatch_log WHERE event_id = :eventId').run({
+          eventId,
+        });
+        this.db.prepare('DELETE FROM external_event_links WHERE event_id = :eventId').run({
+          eventId,
+        });
+        this.db
+          .prepare(`DELETE FROM change_log WHERE entity = 'event' AND entity_id = :eventId`)
+          .run({ eventId });
+        this.db.prepare('DELETE FROM event_metadata WHERE id = :eventId').run({
+          eventId,
+        });
+      }
+
+      if (removingAllEvents) {
+        this.db.prepare('DELETE FROM tag_catalog').run();
+        this.db.prepare('DELETE FROM change_log').run();
+        this.setMeta('lastSequence', '0');
+      }
+
+      this.setMeta('demoSeedState', 'disabled');
+    });
+
+    return demoEventIds.length;
+  }
+
   clearCalendarDataForHostedBootstrap() {
     this.withTransaction(() => {
+      this.db.prepare('DELETE FROM external_event_links').run();
+      this.db.prepare('DELETE FROM external_calendar_sources').run();
       this.db.prepare('DELETE FROM event_content').run();
       this.db.prepare('DELETE FROM event_metadata').run();
       this.db.prepare('DELETE FROM tag_catalog').run();
       this.db.prepare('DELETE FROM change_log').run();
+      this.db.prepare('DELETE FROM local_transport_sessions').run();
       this.setMeta('lastSequence', '0');
       this.setMeta('demoSeedState', 'disabled');
     });
@@ -735,12 +998,19 @@ class CalendarStore {
       groupName: event.groupName,
       location: event.location || '',
       people: event.people || [],
+      inviteRecipients: event.inviteRecipients || [],
+      sourceTimeZone: event.sourceTimeZone || '',
       reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
       desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
       emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
       emailNotificationRecipients: event.emailNotificationRecipients || [],
       notifications: normalizeStoredNotifications(event),
       tags: event.tags || [],
+      inviteTargetAccountId: event.inviteTargetAccountId || '',
+      inviteTargetProvider: normalizeInviteProvider(event.inviteTargetProvider),
+      inviteTargetCalendarId: event.inviteTargetCalendarId || '',
+      inviteDeliveryMode: normalizeInviteDeliveryMode(event.inviteDeliveryMode),
+      lastInviteError: event.lastInviteError || '',
       externalProviderLinks: event.externalProviderLinks || [],
     };
     const nextContent = {
@@ -884,12 +1154,19 @@ class CalendarStore {
       groupName: input.groupName || '',
       location: input.location || '',
       people: Array.isArray(input.people) ? input.people : [],
+      inviteRecipients: extractInviteeEmails(input.inviteRecipients || []),
+      sourceTimeZone: String(input.sourceTimeZone || '').trim(),
       reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
       desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),
       emailNotificationEnabled: Boolean(primaryNotification?.emailNotificationEnabled),
       emailNotificationRecipients: primaryNotification?.emailNotificationRecipients || [],
       notifications,
       tags: this.normalizeTags(input.tags || []),
+      inviteTargetAccountId: String(input.inviteTargetAccountId || '').trim(),
+      inviteTargetProvider: normalizeInviteProvider(input.inviteTargetProvider),
+      inviteTargetCalendarId: String(input.inviteTargetCalendarId || '').trim(),
+      inviteDeliveryMode: normalizeInviteDeliveryMode(input.inviteDeliveryMode),
+      lastInviteError: String(input.lastInviteError || '').trim(),
       externalProviderLinks: input.externalProviderLinks || [],
     };
   }
@@ -909,13 +1186,14 @@ class CalendarStore {
           type,
           completed,
           repeat_rule,
-          has_deadline,
-          starts_at,
-          ends_at,
-          color,
-          sync_policy,
-          visibility,
-          deleted,
+        has_deadline,
+        starts_at,
+        ends_at,
+        is_all_day,
+        color,
+        sync_policy,
+        visibility,
+        deleted,
           updated_at,
           updated_by,
           content_cipher_version
@@ -927,6 +1205,7 @@ class CalendarStore {
           :hasDeadline,
           :startsAt,
           :endsAt,
+          :isAllDay,
           :color,
           :syncPolicy,
           :visibility,
@@ -944,6 +1223,7 @@ class CalendarStore {
         hasDeadline: input.hasDeadline ? 1 : 0,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
+        isAllDay: input.isAllDay ? 1 : 0,
         color: input.color,
         syncPolicy: input.syncPolicy || 'internal_only',
         visibility: input.visibility || 'private',
@@ -980,6 +1260,154 @@ class CalendarStore {
     return this.getEventById(eventId);
   }
 
+  upsertEventRecord(input, options = {}) {
+    const existingEvent = input.id ? this.getEventById(input.id) : null;
+    if (!existingEvent) {
+      return this.insertEventRecord(input, options);
+    }
+
+    const timestamp = nowIso();
+    const nextContent = this.buildEventContent(input);
+    const currentContent = {
+      title: existingEvent.title,
+      description: existingEvent.description,
+      groupName: existingEvent.groupName,
+      location: existingEvent.location || '',
+      people: existingEvent.people || [],
+      inviteRecipients: existingEvent.inviteRecipients || [],
+      sourceTimeZone: existingEvent.sourceTimeZone || '',
+      reminderMinutesBeforeStart: existingEvent.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(existingEvent.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(existingEvent.emailNotificationEnabled),
+      emailNotificationRecipients: existingEvent.emailNotificationRecipients || [],
+      notifications: normalizeStoredNotifications(existingEvent),
+      tags: existingEvent.tags || [],
+      inviteTargetAccountId: existingEvent.inviteTargetAccountId || '',
+      inviteTargetProvider: normalizeInviteProvider(existingEvent.inviteTargetProvider),
+      inviteTargetCalendarId: existingEvent.inviteTargetCalendarId || '',
+      inviteDeliveryMode: normalizeInviteDeliveryMode(existingEvent.inviteDeliveryMode),
+      lastInviteError: existingEvent.lastInviteError || '',
+      externalProviderLinks: existingEvent.externalProviderLinks || [],
+    };
+
+    const metadataPatch = {};
+    for (const field of [
+      'type',
+      'completed',
+      'repeat',
+      'hasDeadline',
+      'startsAt',
+      'endsAt',
+      'isAllDay',
+      'color',
+      'syncPolicy',
+      'visibility',
+    ]) {
+      if (input[field] !== existingEvent[field]) {
+        metadataPatch[field] = input[field];
+      }
+    }
+
+    const contentChanged = JSON.stringify(nextContent) !== JSON.stringify(currentContent);
+    if (Object.keys(metadataPatch).length === 0 && !contentChanged) {
+      return existingEvent;
+    }
+
+    this.upsertTagCatalog(nextContent.tags);
+    this.db
+      .prepare(
+        `UPDATE event_metadata
+         SET type = :type,
+             completed = :completed,
+             repeat_rule = :repeatRule,
+             has_deadline = :hasDeadline,
+             starts_at = :startsAt,
+             ends_at = :endsAt,
+             is_all_day = :isAllDay,
+             color = :color,
+             sync_policy = :syncPolicy,
+             visibility = :visibility,
+             deleted = 0,
+             updated_at = :updatedAt,
+             updated_by = :updatedBy
+         WHERE id = :id`
+      )
+      .run({
+        id: existingEvent.id,
+        type: input.type,
+        completed: input.completed ? 1 : 0,
+        repeatRule: input.repeat,
+        hasDeadline: input.hasDeadline ? 1 : 0,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        isAllDay: input.isAllDay ? 1 : 0,
+        color: input.color,
+        syncPolicy: input.syncPolicy,
+        visibility: input.visibility,
+        updatedAt: timestamp,
+        updatedBy: options.deviceId || this.deviceId,
+      });
+
+    if (contentChanged) {
+      this.db
+        .prepare(
+          `UPDATE event_content
+           SET cipher_text = :cipherText
+           WHERE event_id = :eventId`
+        )
+        .run({
+          eventId: existingEvent.id,
+          cipherText: this.cryptoService.encryptJson(
+            nextContent,
+            `event:${existingEvent.id}:content`
+          ),
+        });
+    }
+
+    const changePatch = {
+      ...metadataPatch,
+    };
+
+    if (contentChanged) {
+      for (const field of [
+        'title',
+        'description',
+        'groupName',
+        'location',
+        'people',
+        'inviteRecipients',
+        'sourceTimeZone',
+        'reminderMinutesBeforeStart',
+        'desktopNotificationEnabled',
+        'emailNotificationEnabled',
+        'emailNotificationRecipients',
+        'notifications',
+        'tags',
+        'inviteTargetAccountId',
+        'inviteTargetProvider',
+        'inviteTargetCalendarId',
+        'inviteDeliveryMode',
+        'lastInviteError',
+        'externalProviderLinks',
+      ]) {
+        if (JSON.stringify(nextContent[field]) !== JSON.stringify(currentContent[field])) {
+          changePatch[field] = nextContent[field];
+        }
+      }
+    }
+
+    this.recordChange({
+      entity: 'event',
+      entityId: existingEvent.id,
+      operation: 'update',
+      patch: changePatch,
+      deviceId: options.deviceId || this.deviceId,
+      signatureKeyId: options.deviceId || this.deviceId,
+    });
+
+    return this.getEventById(existingEvent.id);
+  }
+
   getEventRowById(eventId) {
     return this.db
       .prepare(
@@ -991,6 +1419,7 @@ class CalendarStore {
           m.has_deadline AS hasDeadline,
           m.starts_at AS startsAt,
           m.ends_at AS endsAt,
+          m.is_all_day AS isAllDay,
           m.color,
           m.sync_policy AS syncPolicy,
           m.visibility,
@@ -1019,6 +1448,8 @@ class CalendarStore {
       groupName: content.groupName || '',
       location: content.location || '',
       people: content.people || [],
+      inviteRecipients: extractInviteeEmails(content.inviteRecipients || []),
+      sourceTimeZone: content.sourceTimeZone || '',
       reminderMinutesBeforeStart: content.reminderMinutesBeforeStart ?? null,
       desktopNotificationEnabled: Boolean(content.desktopNotificationEnabled),
       emailNotificationEnabled: Boolean(content.emailNotificationEnabled),
@@ -1026,6 +1457,7 @@ class CalendarStore {
       notifications: normalizeStoredNotifications(content),
       startsAt: row.startsAt,
       endsAt: row.endsAt,
+      isAllDay: Boolean(row.isAllDay),
       color: row.color,
       tags: content.tags || [],
       deleted: Boolean(row.deleted),
@@ -1035,6 +1467,11 @@ class CalendarStore {
       visibility: row.visibility,
       contentCipherVersion: row.contentCipherVersion,
       externalProviderLinks: content.externalProviderLinks || [],
+      inviteTargetAccountId: content.inviteTargetAccountId || '',
+      inviteTargetProvider: normalizeInviteProvider(content.inviteTargetProvider),
+      inviteTargetCalendarId: content.inviteTargetCalendarId || '',
+      inviteDeliveryMode: normalizeInviteDeliveryMode(content.inviteDeliveryMode),
+      lastInviteError: content.lastInviteError || '',
     };
   }
 
@@ -1054,6 +1491,7 @@ class CalendarStore {
           m.has_deadline AS hasDeadline,
           m.starts_at AS startsAt,
           m.ends_at AS endsAt,
+          m.is_all_day AS isAllDay,
           m.color,
           m.sync_policy AS syncPolicy,
           m.visibility,
@@ -1092,7 +1530,7 @@ class CalendarStore {
     });
   }
 
-  createHolidayEventInput(countryCode, holiday) {
+  createHolidayEventInput(countryCode, holiday, timeZone = '') {
     return sanitizeEventCreateInput({
       title: holiday.name || holiday.localName || 'Public holiday',
       description: `${HOLIDAY_DESCRIPTION_MARKER} Imported default public holiday for ${countryCode}.`,
@@ -1103,8 +1541,10 @@ class CalendarStore {
       groupName: '',
       location: '',
       people: [],
-      startsAt: new Date(`${holiday.date}T09:00:00`).toISOString(),
-      endsAt: new Date(`${holiday.date}T09:30:00`).toISOString(),
+      startsAt: new Date(`${holiday.date}T00:00:00.000Z`).toISOString(),
+      endsAt: new Date(new Date(`${holiday.date}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+      isAllDay: true,
+      sourceTimeZone: String(timeZone || ''),
       color: HOLIDAY_EVENT_COLOR,
       tags: [
         { label: 'Holiday', color: HOLIDAY_TAG_COLOR },
@@ -1276,7 +1716,7 @@ class CalendarStore {
             }
 
             const createdEvent = this.insertEventRecord(
-              this.createHolidayEventInput(normalizedCountryCode, holiday),
+              this.createHolidayEventInput(normalizedCountryCode, holiday, timeZone),
               { deviceId: this.deviceId }
             );
 
@@ -1337,6 +1777,7 @@ class CalendarStore {
       'hasDeadline',
       'startsAt',
       'endsAt',
+      'isAllDay',
       'color',
       'syncPolicy',
       'visibility',
@@ -1353,12 +1794,19 @@ class CalendarStore {
       'groupName',
       'location',
       'people',
+      'inviteRecipients',
+      'sourceTimeZone',
       'reminderMinutesBeforeStart',
       'desktopNotificationEnabled',
       'emailNotificationEnabled',
       'emailNotificationRecipients',
       'notifications',
       'tags',
+      'inviteTargetAccountId',
+      'inviteTargetProvider',
+      'inviteTargetCalendarId',
+      'inviteDeliveryMode',
+      'lastInviteError',
       'externalProviderLinks',
     ]) {
       if (patch[field] !== undefined) {
@@ -1399,6 +1847,16 @@ class CalendarStore {
         `change:${row.changeId}:patch`
       );
       const { metadataPatch, contentPatch } = this.splitHostedPatch(patch);
+      const currentEventRow =
+        row.operation !== 'delete' && row.entity === 'event'
+          ? this.db
+              .prepare(
+                `SELECT cipher_text AS cipherText
+                 FROM event_content
+                 WHERE event_id = :eventId`
+              )
+              .get({ eventId: row.entityId })
+          : null;
 
       return {
         deviceId: row.deviceId,
@@ -1407,6 +1865,7 @@ class CalendarStore {
         entityId: row.entityId,
         operation: row.operation,
         contentPatch: Object.keys(contentPatch).length > 0 ? contentPatch : null,
+        encryptedContent: currentEventRow?.cipherText || null,
         encryptedPatch: null,
         metadataPatch,
         nonce: row.nonce,
@@ -1467,13 +1926,21 @@ class CalendarStore {
           groupName: contentPatch.groupName || '',
           location: contentPatch.location || '',
           people: contentPatch.people || [],
+          inviteRecipients: contentPatch.inviteRecipients || [],
+          sourceTimeZone: contentPatch.sourceTimeZone || '',
           reminderMinutesBeforeStart: contentPatch.reminderMinutesBeforeStart ?? null,
           desktopNotificationEnabled: Boolean(contentPatch.desktopNotificationEnabled),
           emailNotificationEnabled: Boolean(contentPatch.emailNotificationEnabled),
           emailNotificationRecipients: contentPatch.emailNotificationRecipients || [],
           notifications: contentPatch.notifications || [],
+          inviteTargetAccountId: contentPatch.inviteTargetAccountId || '',
+          inviteTargetProvider: contentPatch.inviteTargetProvider || '',
+          inviteTargetCalendarId: contentPatch.inviteTargetCalendarId || '',
+          inviteDeliveryMode: contentPatch.inviteDeliveryMode || 'local_only',
+          lastInviteError: contentPatch.lastInviteError || '',
           startsAt: metadataPatch.startsAt,
           endsAt: metadataPatch.endsAt,
+          isAllDay: Boolean(metadataPatch.isAllDay),
           color: metadataPatch.color || '#4f9d69',
           tags: contentPatch.tags || [],
           syncPolicy: metadataPatch.syncPolicy || 'internal_only',
@@ -1500,6 +1967,7 @@ class CalendarStore {
             has_deadline,
             starts_at,
             ends_at,
+            is_all_day,
             color,
             sync_policy,
             visibility,
@@ -1515,6 +1983,7 @@ class CalendarStore {
             :hasDeadline,
             :startsAt,
             :endsAt,
+            :isAllDay,
             :color,
             :syncPolicy,
             :visibility,
@@ -1546,6 +2015,7 @@ class CalendarStore {
           hasDeadline: sanitized.hasDeadline ? 1 : 0,
           startsAt: sanitized.startsAt,
           endsAt: sanitized.endsAt,
+          isAllDay: sanitized.isAllDay ? 1 : 0,
           color: sanitized.color,
           syncPolicy: sanitized.syncPolicy,
           visibility: sanitized.visibility,
@@ -1570,12 +2040,19 @@ class CalendarStore {
               groupName: sanitized.groupName,
               location: sanitized.location,
               people: sanitized.people || [],
+              inviteRecipients: sanitized.inviteRecipients || [],
+              sourceTimeZone: sanitized.sourceTimeZone || '',
               reminderMinutesBeforeStart: sanitized.reminderMinutesBeforeStart ?? null,
               desktopNotificationEnabled: Boolean(sanitized.desktopNotificationEnabled),
               emailNotificationEnabled: Boolean(sanitized.emailNotificationEnabled),
               emailNotificationRecipients: sanitized.emailNotificationRecipients || [],
               notifications: sanitized.notifications || [],
               tags: content.tags,
+              inviteTargetAccountId: sanitized.inviteTargetAccountId || '',
+              inviteTargetProvider: sanitized.inviteTargetProvider || '',
+              inviteTargetCalendarId: sanitized.inviteTargetCalendarId || '',
+              inviteDeliveryMode: sanitized.inviteDeliveryMode || 'local_only',
+              lastInviteError: sanitized.lastInviteError || '',
               externalProviderLinks: sanitized.externalProviderLinks || [],
             },
             `event:${envelope.entityId}:content`
@@ -1731,6 +2208,8 @@ class CalendarStore {
           people: event.people || [],
           startsAt: event.startsAt,
           endsAt: event.endsAt,
+          isAllDay: Boolean(event.isAllDay),
+          sourceTimeZone: event.sourceTimeZone || '',
           color: event.color || '#4f9d69',
           tags: normalizeLegacyTags(event.tags, legacyState.tags),
           syncPolicy: event.syncPolicy || 'internal_only',
@@ -1777,6 +2256,8 @@ class CalendarStore {
       lastSequence: Number(this.getMeta('lastSequence') || '0'),
       events,
       tags: this.getTagCatalogSnapshot(),
+      externalCalendarSources: this.listExternalCalendarSources(),
+      externalEventLinks: this.listExternalEventLinks(),
       changes,
       stats: {
         activeEventCount: events.length,
@@ -1810,6 +2291,7 @@ class CalendarStore {
       auth: {
         providers,
         connectedAccounts,
+        clientConfig: this.oauthService.getClientConfigSnapshot(),
       },
       devices: {
         hostname: os.hostname(),
@@ -1828,12 +2310,1112 @@ class CalendarStore {
     };
   }
 
+  parseStoredCursor(sourceId, cipherText) {
+    if (!cipherText) {
+      return null;
+    }
+
+    const decrypted = this.cryptoService.decryptText(
+      cipherText,
+      `external-source:${sourceId}:cursor`
+    );
+    try {
+      return JSON.parse(decrypted);
+    } catch {
+      return decrypted;
+    }
+  }
+
+  encodeStoredCursor(sourceId, value) {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    const serialized =
+      typeof value === 'string' ? value : JSON.stringify(value);
+    return this.cryptoService.encryptText(
+      serialized,
+      `external-source:${sourceId}:cursor`
+    );
+  }
+
+  rowToExternalCalendarSource(row) {
+    return {
+      sourceId: row.sourceId,
+      accountId: row.accountId,
+      provider: row.provider,
+      remoteCalendarId: row.remoteCalendarId,
+      displayName: row.displayName,
+      selected: Boolean(row.selected),
+      syncCursor: this.parseStoredCursor(row.sourceId, row.syncCursorCipherText),
+      lastSyncedAt: row.lastSyncedAt || null,
+      lastError: row.lastError || null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  listExternalCalendarSources() {
+    return this.db
+      .prepare(
+        `SELECT
+          source_id AS sourceId,
+          account_id AS accountId,
+          provider,
+          remote_calendar_id AS remoteCalendarId,
+          display_name AS displayName,
+          selected,
+          sync_cursor_cipher_text AS syncCursorCipherText,
+          last_synced_at AS lastSyncedAt,
+          last_error AS lastError,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+         FROM external_calendar_sources
+         ORDER BY created_at ASC`
+      )
+      .all()
+      .map((row) => this.rowToExternalCalendarSource(row));
+  }
+
+  getExternalCalendarSourceById(sourceId) {
+    const row = this.db
+      .prepare(
+        `SELECT
+          source_id AS sourceId,
+          account_id AS accountId,
+          provider,
+          remote_calendar_id AS remoteCalendarId,
+          display_name AS displayName,
+          selected,
+          sync_cursor_cipher_text AS syncCursorCipherText,
+          last_synced_at AS lastSyncedAt,
+          last_error AS lastError,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+         FROM external_calendar_sources
+         WHERE source_id = :sourceId
+         LIMIT 1`
+      )
+      .get({ sourceId });
+
+    return row ? this.rowToExternalCalendarSource(row) : null;
+  }
+
+  upsertExternalCalendarSource(input = {}) {
+    const existing = this.db
+      .prepare(
+        `SELECT source_id AS sourceId
+         FROM external_calendar_sources
+         WHERE account_id = :accountId
+           AND provider = :provider
+           AND remote_calendar_id = :remoteCalendarId
+         LIMIT 1`
+      )
+      .get({
+        accountId: input.accountId,
+        provider: input.provider,
+        remoteCalendarId: input.remoteCalendarId,
+      });
+    const sourceId = existing?.sourceId || input.sourceId || createId('source');
+    const timestamp = nowIso();
+
+    this.db
+      .prepare(
+        `INSERT INTO external_calendar_sources (
+          source_id,
+          account_id,
+          provider,
+          remote_calendar_id,
+          display_name,
+          selected,
+          sync_cursor_cipher_text,
+          last_synced_at,
+          last_error,
+          created_at,
+          updated_at
+        ) VALUES (
+          :sourceId,
+          :accountId,
+          :provider,
+          :remoteCalendarId,
+          :displayName,
+          :selected,
+          :syncCursorCipherText,
+          :lastSyncedAt,
+          :lastError,
+          :createdAt,
+          :updatedAt
+        )
+        ON CONFLICT(source_id) DO UPDATE SET
+          account_id = excluded.account_id,
+          provider = excluded.provider,
+          remote_calendar_id = excluded.remote_calendar_id,
+          display_name = excluded.display_name,
+          selected = excluded.selected,
+          sync_cursor_cipher_text = excluded.sync_cursor_cipher_text,
+          last_synced_at = excluded.last_synced_at,
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at`
+      )
+      .run({
+        sourceId,
+        accountId: input.accountId,
+        provider: input.provider,
+        remoteCalendarId: input.remoteCalendarId,
+        displayName: input.displayName || input.remoteCalendarId,
+        selected: input.selected === false ? 0 : 1,
+        syncCursorCipherText: this.encodeStoredCursor(sourceId, input.syncCursor),
+        lastSyncedAt: input.lastSyncedAt || null,
+        lastError: input.lastError || null,
+        createdAt: input.createdAt || timestamp,
+        updatedAt: timestamp,
+      });
+
+    return this.getExternalCalendarSourceById(sourceId);
+  }
+
+  listExternalEventLinks(filters = {}) {
+    const clauses = [];
+    const params = {};
+
+    if (filters.sourceId) {
+      clauses.push('source_id = :sourceId');
+      params.sourceId = filters.sourceId;
+    }
+
+    if (filters.eventId) {
+      clauses.push('event_id = :eventId');
+      params.eventId = filters.eventId;
+    }
+
+    if (filters.syncStatus) {
+      clauses.push('sync_status = :syncStatus');
+      params.syncStatus = normalizeSourceLinkStatus(filters.syncStatus);
+    }
+
+    if (filters.linkMode) {
+      clauses.push('link_mode = :linkMode');
+      params.linkMode = normalizeExternalLinkMode(filters.linkMode);
+    }
+
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    return this.db
+      .prepare(
+        `SELECT
+          event_id AS eventId,
+          source_id AS sourceId,
+          provider,
+          remote_calendar_id AS remoteCalendarId,
+          remote_event_id AS remoteEventId,
+          remote_version AS remoteVersion,
+          sync_status AS syncStatus,
+          link_mode AS linkMode,
+          last_seen_remote_at AS lastSeenRemoteAt,
+          last_push_error AS lastPushError,
+          last_pushed_at AS lastPushedAt,
+          imported_at AS importedAt,
+          updated_at AS updatedAt
+         FROM external_event_links
+         ${whereClause}
+         ORDER BY imported_at ASC`
+      )
+      .all(params);
+  }
+
+  findExternalEventLink(provider, remoteCalendarId, remoteEventId, sourceId = '') {
+    return (
+      this.db
+        .prepare(
+          `SELECT
+            event_id AS eventId,
+            source_id AS sourceId,
+            provider,
+            remote_calendar_id AS remoteCalendarId,
+            remote_event_id AS remoteEventId,
+            remote_version AS remoteVersion,
+            sync_status AS syncStatus,
+            link_mode AS linkMode,
+            last_seen_remote_at AS lastSeenRemoteAt,
+            last_push_error AS lastPushError,
+            last_pushed_at AS lastPushedAt,
+            imported_at AS importedAt,
+            updated_at AS updatedAt
+           FROM external_event_links
+           WHERE provider = :provider
+             AND remote_calendar_id = :remoteCalendarId
+             AND remote_event_id = :remoteEventId
+             AND (:sourceId = '' OR source_id = :sourceId)
+           LIMIT 1`
+        )
+        .get({
+          provider,
+          remoteCalendarId,
+          remoteEventId,
+          sourceId: sourceId || '',
+        }) || null
+    );
+  }
+
+  upsertExternalEventLink(input = {}) {
+    const timestamp = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO external_event_links (
+          event_id,
+          source_id,
+          provider,
+          remote_calendar_id,
+          remote_event_id,
+          remote_version,
+          sync_status,
+          link_mode,
+          last_seen_remote_at,
+          last_push_error,
+          last_pushed_at,
+          imported_at,
+          updated_at
+        ) VALUES (
+          :eventId,
+          :sourceId,
+          :provider,
+          :remoteCalendarId,
+          :remoteEventId,
+          :remoteVersion,
+          :syncStatus,
+          :linkMode,
+          :lastSeenRemoteAt,
+          :lastPushError,
+          :lastPushedAt,
+          :importedAt,
+          :updatedAt
+        )
+        ON CONFLICT(event_id, source_id) DO UPDATE SET
+          provider = excluded.provider,
+          remote_calendar_id = excluded.remote_calendar_id,
+          remote_event_id = excluded.remote_event_id,
+          remote_version = excluded.remote_version,
+          sync_status = excluded.sync_status,
+          link_mode = excluded.link_mode,
+          last_seen_remote_at = excluded.last_seen_remote_at,
+          last_push_error = excluded.last_push_error,
+          last_pushed_at = excluded.last_pushed_at,
+          updated_at = excluded.updated_at`
+      )
+      .run({
+        eventId: input.eventId,
+        sourceId: input.sourceId,
+        provider: input.provider,
+        remoteCalendarId: input.remoteCalendarId,
+        remoteEventId: input.remoteEventId,
+        remoteVersion: input.remoteVersion || null,
+        syncStatus: normalizeSourceLinkStatus(input.syncStatus),
+        linkMode: normalizeExternalLinkMode(input.linkMode),
+        lastSeenRemoteAt: input.lastSeenRemoteAt || null,
+        lastPushError: input.lastPushError || null,
+        lastPushedAt: input.lastPushedAt || null,
+        importedAt: input.importedAt || timestamp,
+        updatedAt: timestamp,
+      });
+  }
+
+  updateExternalLinkStatus(eventId, syncStatus, filters = {}) {
+    const clauses = [`event_id = :eventId`, `sync_status = 'active'`];
+    const params = {
+      eventId,
+      syncStatus: normalizeSourceLinkStatus(syncStatus),
+      updatedAt: nowIso(),
+    };
+
+    if (filters.linkMode) {
+      clauses.push('link_mode = :linkMode');
+      params.linkMode = normalizeExternalLinkMode(filters.linkMode);
+    }
+
+    this.db
+      .prepare(
+        `UPDATE external_event_links
+         SET sync_status = :syncStatus,
+             updated_at = :updatedAt
+         WHERE ${clauses.join(' AND ')}`
+      )
+      .run(params);
+  }
+
+  filterEventsByScope(events = [], scope = 'all') {
+    const normalizedScope = cloneScopeValue(scope);
+    if (!normalizedScope || normalizedScope === 'all') {
+      return events;
+    }
+
+    return events.filter((event) => {
+      if (Array.isArray(normalizedScope?.eventIds) && normalizedScope.eventIds.length > 0) {
+        if (!normalizedScope.eventIds.includes(event.id)) {
+          return false;
+        }
+      }
+
+      if (normalizedScope?.dateFrom) {
+        const dateFrom = new Date(normalizedScope.dateFrom);
+        if (!Number.isNaN(dateFrom.getTime()) && new Date(event.endsAt) < dateFrom) {
+          return false;
+        }
+      }
+
+      if (normalizedScope?.dateTo) {
+        const dateTo = new Date(normalizedScope.dateTo);
+        if (!Number.isNaN(dateTo.getTime()) && new Date(event.startsAt) > dateTo) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  buildExportBundle(scope = 'all') {
+    const filteredEvents = this.filterEventsByScope(this.listEvents(false), scope);
+    const eventIds = new Set(filteredEvents.map((event) => event.id));
+    const externalEventLinks = this.listExternalEventLinks().filter((link) =>
+      eventIds.has(link.eventId)
+    );
+    const sourceIds = new Set(externalEventLinks.map((link) => link.sourceId));
+    const externalCalendarSources = this.listExternalCalendarSources().filter((source) =>
+      sourceIds.has(source.sourceId)
+    );
+
+    return buildCalendarBundle({
+      deviceId: this.deviceId,
+      lastSequence: Number(this.getMeta('lastSequence') || '0'),
+      events: filteredEvents,
+      tags: this.getTagCatalogSnapshot(),
+      externalCalendarSources,
+      externalEventLinks,
+    });
+  }
+
+  resolveTransferFormat(format, filePath = '') {
+    const normalizedFormat = String(format || '').trim().toLowerCase();
+    if (normalizedFormat === 'json' || normalizedFormat === 'bundle') {
+      return 'json';
+    }
+
+    if (normalizedFormat === 'ics') {
+      return 'ics';
+    }
+
+    const extension = path.extname(String(filePath || '')).toLowerCase();
+    if (extension === '.ics') {
+      return 'ics';
+    }
+
+    return 'json';
+  }
+
+  resolveTransferPath(filePath, allowedExtensions = ['.json', '.ics']) {
+    const resolvedPath = path.resolve(String(filePath || '').trim());
+    if (!resolvedPath) {
+      throw new Error('A file path is required.');
+    }
+
+    const extension = path.extname(resolvedPath).toLowerCase();
+    if (!allowedExtensions.includes(extension)) {
+      throw new Error(`Only ${allowedExtensions.join(', ')} files are supported.`);
+    }
+
+    return resolvedPath;
+  }
+
+  listExternalCalendars({ accountId }) {
+    return this.oauthService.listExternalCalendars(accountId);
+  }
+
+  isProviderCalendarWritable(calendar = {}) {
+    const accessRole = String(calendar.accessRole || '').trim().toLowerCase();
+    if (calendar.provider === 'google') {
+      return ['owner', 'writer'].includes(accessRole);
+    }
+
+    if (calendar.provider === 'microsoft') {
+      return calendar.selected !== false && accessRole !== 'reader';
+    }
+
+    return false;
+  }
+
+  shouldSyncProviderInvite(event = {}) {
+    return (
+      normalizeInviteDeliveryMode(event.inviteDeliveryMode) === 'provider_invite' &&
+      extractInviteeEmails(event.inviteRecipients).length > 0
+    );
+  }
+
+  async resolveInviteTarget(event = {}) {
+    const attendees = extractInviteeEmails(event.inviteRecipients);
+    if (attendees.length === 0) {
+      return null;
+    }
+
+    const expectedProvider = resolveInviteProviderFromEvent(event);
+    if (!expectedProvider) {
+      throw new Error('Internal events stay local. Switch the event scope to Work or Personal before sending invites.');
+    }
+
+    const targetProvider = normalizeInviteProvider(event.inviteTargetProvider) || expectedProvider;
+    if (targetProvider !== expectedProvider) {
+      throw new Error(
+        expectedProvider === 'google'
+          ? 'Work events must invite through a connected Google account.'
+          : 'Personal events must invite through a connected Microsoft account.'
+      );
+    }
+
+    if (!event.inviteTargetAccountId || !event.inviteTargetCalendarId) {
+      throw new Error('Choose the connected account and calendar to send invites through.');
+    }
+
+    const account = this.listConnectedAccounts().find(
+      (entry) => entry.accountId === event.inviteTargetAccountId
+    );
+    if (!account || account.status !== 'connected' || account.provider !== targetProvider) {
+      throw new Error('The selected invite account is not connected for this event scope.');
+    }
+
+    if (!account.canWrite || !account.writeScopeGranted) {
+      throw new Error('Reconnect the selected account with calendar write access before sending invites.');
+    }
+
+    const calendars = await this.oauthService.listExternalCalendars(account.accountId);
+    const calendar = calendars.find(
+      (entry) => entry.remoteCalendarId === event.inviteTargetCalendarId
+    );
+    if (!calendar || !this.isProviderCalendarWritable(calendar)) {
+      throw new Error('The selected calendar is not writable. Choose a writable calendar for invites.');
+    }
+
+    return {
+      account,
+      calendar,
+      attendees,
+      provider: targetProvider,
+    };
+  }
+
+  buildOutboundExternalProviderLinks(event = {}, remoteLink = {}) {
+    const nextLink = {
+      provider: remoteLink.provider,
+      externalEventId: remoteLink.remoteEventId,
+      url: remoteLink.url || '',
+      mode: 'outbound',
+      accountId: remoteLink.accountId || event.inviteTargetAccountId || '',
+      remoteCalendarId: remoteLink.remoteCalendarId || event.inviteTargetCalendarId || '',
+    };
+
+    return [
+      ...(event.externalProviderLinks || []).filter(
+        (link) =>
+          !(
+            String(link?.mode || '').toLowerCase() === 'outbound' ||
+            (link?.provider === nextLink.provider && link?.externalEventId === nextLink.externalEventId)
+          )
+      ),
+      nextLink,
+    ];
+  }
+
+  buildOutboundLinkInput(eventId, source, remoteLink, timestamp = nowIso()) {
+    return {
+      eventId,
+      sourceId: source.sourceId,
+      provider: remoteLink.provider,
+      remoteCalendarId: remoteLink.remoteCalendarId,
+      remoteEventId: remoteLink.remoteEventId,
+      remoteVersion: remoteLink.remoteVersion || null,
+      syncStatus: 'active',
+      linkMode: 'outbound',
+      lastSeenRemoteAt: null,
+      lastPushError: null,
+      lastPushedAt: timestamp,
+      importedAt: timestamp,
+    };
+  }
+
+  async pushOutboundInvite(event, existingEvent = null) {
+    const target = await this.resolveInviteTarget(event);
+    if (!target) {
+      return null;
+    }
+
+    const activeOutboundLinks = existingEvent
+      ? this.listExternalEventLinks({
+          eventId: existingEvent.id,
+          syncStatus: 'active',
+          linkMode: 'outbound',
+        })
+      : [];
+    const matchingLink = activeOutboundLinks.find((link) => {
+      const source = this.getExternalCalendarSourceById(link.sourceId);
+      return (
+        source?.accountId === target.account.accountId &&
+        source.provider === target.provider &&
+        source.remoteCalendarId === target.calendar.remoteCalendarId
+      );
+    });
+
+    const remoteLink = matchingLink
+      ? await this.oauthService.updateOutboundCalendarEvent({
+          accountId: target.account.accountId,
+          remoteCalendarId: target.calendar.remoteCalendarId,
+          remoteEventId: matchingLink.remoteEventId,
+          event,
+          attendees: target.attendees,
+        })
+      : await this.oauthService.createOutboundCalendarEvent({
+          accountId: target.account.accountId,
+          remoteCalendarId: target.calendar.remoteCalendarId,
+          event,
+          attendees: target.attendees,
+        });
+
+    if (!remoteLink?.remoteEventId) {
+      throw new Error('The provider did not return an event id for the invite.');
+    }
+
+    const source = this.upsertExternalCalendarSource({
+      accountId: target.account.accountId,
+      provider: target.provider,
+      remoteCalendarId: target.calendar.remoteCalendarId,
+      displayName: target.calendar.displayName,
+      selected: true,
+      syncCursor: null,
+      lastError: null,
+    });
+
+    return {
+      eventPatch: {
+        inviteTargetAccountId: target.account.accountId,
+        inviteTargetProvider: target.provider,
+        inviteTargetCalendarId: target.calendar.remoteCalendarId,
+        inviteDeliveryMode: 'provider_invite',
+        lastInviteError: '',
+        externalProviderLinks: this.buildOutboundExternalProviderLinks(event, remoteLink),
+      },
+      source,
+      linkInput: this.buildOutboundLinkInput(existingEvent?.id || '', source, remoteLink),
+      detachPreviousOutbound: Boolean(existingEvent && !matchingLink),
+    };
+  }
+
+  buildSanitizedExternalEventInput(remoteEvent = {}) {
+    return sanitizeEventCreateInput({
+      title: remoteEvent.title,
+      description: remoteEvent.description || '',
+      type: remoteEvent.type || 'meeting',
+      completed: Boolean(remoteEvent.completed),
+      repeat: remoteEvent.repeat || 'none',
+      hasDeadline: Boolean(remoteEvent.hasDeadline),
+      groupName: remoteEvent.groupName || '',
+      location: remoteEvent.location || '',
+      people: remoteEvent.people || [],
+      inviteRecipients: remoteEvent.inviteRecipients || [],
+      startsAt: remoteEvent.startsAt,
+      endsAt: remoteEvent.endsAt,
+      isAllDay: Boolean(remoteEvent.isAllDay),
+      sourceTimeZone: remoteEvent.sourceTimeZone || '',
+      reminderMinutesBeforeStart: remoteEvent.reminderMinutesBeforeStart ?? null,
+      desktopNotificationEnabled: Boolean(remoteEvent.desktopNotificationEnabled),
+      emailNotificationEnabled: Boolean(remoteEvent.emailNotificationEnabled),
+      emailNotificationRecipients: remoteEvent.emailNotificationRecipients || [],
+      notifications: remoteEvent.notifications || [],
+      color: remoteEvent.color || '#4f9d69',
+      tags: remoteEvent.tags || [],
+      syncPolicy: remoteEvent.syncPolicy || 'internal_only',
+      visibility: remoteEvent.visibility || 'private',
+      externalProviderLinks: remoteEvent.externalProviderLinks || [],
+    });
+  }
+
+  applyExternalSourceSnapshot(source, fetchedEvents = [], syncCursor = null) {
+    const timestamp = nowIso();
+    const seenRemoteIds = new Set();
+    let createdCount = 0;
+    let updatedCount = 0;
+    let removedCount = 0;
+
+    this.withTransaction(() => {
+      for (const remoteEvent of fetchedEvents) {
+        if (!remoteEvent?.remoteEventId) {
+          continue;
+        }
+
+        seenRemoteIds.add(remoteEvent.remoteEventId);
+        const existingLink = this.findExternalEventLink(
+          source.provider,
+          source.remoteCalendarId,
+          remoteEvent.remoteEventId,
+          source.sourceId
+        );
+
+        if (existingLink?.syncStatus === 'detached') {
+          continue;
+        }
+
+        if (remoteEvent.remoteDeleted) {
+          if (existingLink && existingLink.syncStatus === 'active') {
+            this.db
+              .prepare(
+                `UPDATE event_metadata
+                 SET deleted = 1,
+                     updated_at = :updatedAt,
+                     updated_by = :updatedBy
+                 WHERE id = :eventId`
+              )
+              .run({
+                eventId: existingLink.eventId,
+                updatedAt: timestamp,
+                updatedBy: this.deviceId,
+              });
+            this.upsertExternalEventLink({
+              ...existingLink,
+              syncStatus: 'removed',
+              lastSeenRemoteAt: timestamp,
+            });
+            this.recordChange({
+              entity: 'event',
+              entityId: existingLink.eventId,
+              operation: 'delete',
+              patch: { deleted: true },
+              deviceId: this.deviceId,
+              signatureKeyId: this.deviceId,
+            });
+            removedCount += 1;
+          }
+          continue;
+        }
+
+        const sanitized = this.buildSanitizedExternalEventInput(remoteEvent);
+        const targetEventId = existingLink?.eventId || createId('event');
+        const existingEvent = this.getEventById(targetEventId);
+        const upserted = this.upsertEventRecord(
+          {
+            ...sanitized,
+            id: targetEventId,
+          },
+          { deviceId: this.deviceId }
+        );
+
+        this.upsertExternalEventLink({
+          eventId: upserted.id,
+          sourceId: source.sourceId,
+          provider: source.provider,
+          remoteCalendarId: source.remoteCalendarId,
+          remoteEventId: remoteEvent.remoteEventId,
+          remoteVersion: remoteEvent.remoteVersion || null,
+          syncStatus: 'active',
+          linkMode: 'imported',
+          lastSeenRemoteAt: timestamp,
+          importedAt: existingLink?.importedAt || timestamp,
+        });
+
+        if (!existingEvent) {
+          createdCount += 1;
+        } else if (
+          existingLink?.syncStatus === 'active' ||
+          existingLink?.syncStatus === 'removed'
+        ) {
+          updatedCount += 1;
+        }
+      }
+
+      const activeLinks = this.listExternalEventLinks({
+        sourceId: source.sourceId,
+        syncStatus: 'active',
+        linkMode: 'imported',
+      });
+      for (const link of activeLinks) {
+        if (seenRemoteIds.has(link.remoteEventId)) {
+          continue;
+        }
+
+        this.db
+          .prepare(
+            `UPDATE event_metadata
+             SET deleted = 1,
+                 updated_at = :updatedAt,
+                 updated_by = :updatedBy
+             WHERE id = :eventId`
+          )
+          .run({
+            eventId: link.eventId,
+            updatedAt: timestamp,
+            updatedBy: this.deviceId,
+          });
+        this.upsertExternalEventLink({
+          ...link,
+          syncStatus: 'removed',
+          lastSeenRemoteAt: timestamp,
+        });
+        this.recordChange({
+          entity: 'event',
+          entityId: link.eventId,
+          operation: 'delete',
+          patch: { deleted: true },
+          deviceId: this.deviceId,
+          signatureKeyId: this.deviceId,
+        });
+        removedCount += 1;
+      }
+
+      this.upsertExternalCalendarSource({
+        ...source,
+        syncCursor,
+        lastSyncedAt: timestamp,
+        lastError: null,
+      });
+    });
+
+    return {
+      source: this.getExternalCalendarSourceById(source.sourceId),
+      createdCount,
+      updatedCount,
+      removedCount,
+      snapshot: this.snapshot(),
+    };
+  }
+
+  async importExternalCalendar({ accountId, remoteCalendarId }) {
+    const calendars = await this.oauthService.listExternalCalendars(accountId);
+    const calendar = calendars.find((entry) => entry.remoteCalendarId === remoteCalendarId);
+    if (!calendar) {
+      throw new Error('External calendar was not found.');
+    }
+
+    const source = this.upsertExternalCalendarSource({
+      accountId,
+      provider: calendar.provider,
+      remoteCalendarId: calendar.remoteCalendarId,
+      displayName: calendar.displayName,
+      selected: true,
+      syncCursor: null,
+    });
+    const remoteState = await this.oauthService.listExternalEvents(
+      accountId,
+      remoteCalendarId,
+      calendar
+    );
+
+    return this.applyExternalSourceSnapshot(source, remoteState.events, remoteState.syncCursor);
+  }
+
+  async refreshExternalSource({ sourceId }) {
+    const source = this.getExternalCalendarSourceById(sourceId);
+    if (!source) {
+      throw new Error('External calendar source was not found.');
+    }
+
+    try {
+      const remoteState = await this.oauthService.listExternalEvents(
+        source.accountId,
+        source.remoteCalendarId,
+        source
+      );
+      return this.applyExternalSourceSnapshot(source, remoteState.events, remoteState.syncCursor);
+    } catch (error) {
+      this.upsertExternalCalendarSource({
+        ...source,
+        lastError: error?.message || 'External refresh failed.',
+      });
+      throw error;
+    }
+  }
+
+  importCalendarBundle(bundle) {
+    const normalizedBundle = typeof bundle === 'string' ? parseCalendarBundleText(bundle) : buildCalendarBundle(bundle);
+    let importedCount = 0;
+
+    this.withTransaction(() => {
+      if (normalizedBundle.tags.length > 0) {
+        this.upsertTagCatalog(normalizedBundle.tags);
+      }
+
+      for (const source of normalizedBundle.externalCalendarSources || []) {
+        this.upsertExternalCalendarSource(source);
+      }
+
+      for (const eventInput of normalizedBundle.events || []) {
+        const sanitized = sanitizeEventCreateInput({
+          ...eventInput,
+          externalProviderLinks: eventInput.externalProviderLinks || [],
+        });
+        this.upsertEventRecord(
+          {
+            ...sanitized,
+            id: eventInput.id || createId('event'),
+          },
+          { deviceId: this.deviceId }
+        );
+        importedCount += 1;
+      }
+
+      for (const link of normalizedBundle.externalEventLinks || []) {
+        if (this.getEventById(link.eventId) && this.getExternalCalendarSourceById(link.sourceId)) {
+          this.upsertExternalEventLink(link);
+        }
+      }
+    });
+
+    return {
+      format: 'json',
+      bundleVersion: CALENDAR_BUNDLE_VERSION,
+      importedCount,
+      snapshot: this.snapshot(),
+    };
+  }
+
+  importIcsText(text) {
+    const parsedEvents = parseIcsText(text);
+    let importedCount = 0;
+
+    this.withTransaction(() => {
+      for (const parsedEvent of parsedEvents) {
+        const sanitized = sanitizeEventCreateInput(parsedEvent);
+        this.insertEventRecord(sanitized, { deviceId: this.deviceId });
+        importedCount += 1;
+      }
+    });
+
+    return {
+      format: 'ics',
+      importedCount,
+      snapshot: this.snapshot(),
+    };
+  }
+
+  importData({ format, path: filePath }) {
+    const resolvedPath = this.resolveTransferPath(filePath);
+    const detectedFormat = this.resolveTransferFormat(format, resolvedPath);
+    const raw = fs.readFileSync(resolvedPath, 'utf8');
+
+    const result =
+      detectedFormat === 'ics' ? this.importIcsText(raw) : this.importCalendarBundle(raw);
+
+    this.logSecurityEvent('calendar_data_imported', {
+      targetType: 'import',
+      targetId: resolvedPath,
+      details: {
+        format: detectedFormat,
+        importedCount: result.importedCount,
+      },
+    });
+
+    return {
+      ...result,
+      path: resolvedPath,
+    };
+  }
+
+  exportData({ format, path: filePath, scope = 'all' }) {
+    const detectedFormat = this.resolveTransferFormat(format, filePath);
+    const resolvedPath = this.resolveTransferPath(
+      filePath,
+      detectedFormat === 'ics' ? ['.ics'] : ['.json']
+    );
+
+    if (detectedFormat === 'ics') {
+      const icsText = serializeEventsToIcs(this.filterEventsByScope(this.listEvents(false), scope));
+      fs.writeFileSync(resolvedPath, icsText, 'utf8');
+    } else {
+      const bundleText = serializeCalendarBundle(this.buildExportBundle(scope));
+      fs.writeFileSync(resolvedPath, bundleText, 'utf8');
+    }
+
+    this.logSecurityEvent('calendar_data_exported', {
+      targetType: 'export',
+      targetId: resolvedPath,
+      details: {
+        format: detectedFormat,
+      },
+    });
+
+    return {
+      format: detectedFormat,
+      path: resolvedPath,
+    };
+  }
+
+  createLocalSession({ mode = 'snapshot', scope = 'all', label = 'Phone transport' } = {}) {
+    const normalizedMode = normalizeTransportMode(mode);
+    const sessionId = createId('transport');
+    const sessionToken = crypto.randomBytes(24).toString('base64url');
+    const approval = this.deviceService.createPairingApproval(label);
+    const expiresAt = new Date(Date.now() + LOCAL_TRANSPORT_SESSION_TTL_MS).toISOString();
+    const scopeValue = cloneScopeValue(scope);
+
+    this.db
+      .prepare(
+        `INSERT INTO local_transport_sessions (
+          session_id,
+          approval_id,
+          session_token_hash,
+          mode,
+          scope_json,
+          base_sequence,
+          expires_at,
+          created_at,
+          closed_at
+        ) VALUES (
+          :sessionId,
+          :approvalId,
+          :sessionTokenHash,
+          :mode,
+          :scopeJson,
+          :baseSequence,
+          :expiresAt,
+          :createdAt,
+          NULL
+        )`
+      )
+      .run({
+        sessionId,
+        approvalId: approval.approvalId,
+        sessionTokenHash: crypto.createHash('sha256').update(sessionToken, 'utf8').digest('hex'),
+        mode: normalizedMode,
+        scopeJson: JSON.stringify(scopeValue ?? 'all'),
+        baseSequence: Number(this.getMeta('lastSequence') || '0'),
+        expiresAt,
+        createdAt: nowIso(),
+      });
+
+    return {
+      sessionId,
+      approvalId: approval.approvalId,
+      code: approval.code,
+      mode: normalizedMode,
+      expiresAt,
+      invite: {
+        version: 'local-transport-invite-v1',
+        sessionId,
+        approvalId: approval.approvalId,
+        token: sessionToken,
+        deviceId: this.deviceId,
+        expiresAt,
+      },
+    };
+  }
+
+  consumeLocalSession({ sessionId, token, device = null }) {
+    const row = this.db
+      .prepare(
+        `SELECT
+          session_id AS sessionId,
+          approval_id AS approvalId,
+          session_token_hash AS sessionTokenHash,
+          mode,
+          scope_json AS scopeJson,
+          base_sequence AS baseSequence,
+          expires_at AS expiresAt,
+          created_at AS createdAt,
+          closed_at AS closedAt
+         FROM local_transport_sessions
+         WHERE session_id = :sessionId
+         LIMIT 1`
+      )
+      .get({ sessionId });
+
+    if (!row) {
+      throw new Error('Local transport session was not found.');
+    }
+
+    if (row.closedAt) {
+      throw new Error('Local transport session is already closed.');
+    }
+
+    if (new Date(row.expiresAt).getTime() <= Date.now()) {
+      throw new Error('Local transport session has expired.');
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
+    if (tokenHash !== row.sessionTokenHash) {
+      throw new Error('Local transport token did not match.');
+    }
+
+    const scope = JSON.parse(row.scopeJson || '"all"');
+    const bundle = this.buildExportBundle(scope);
+    const payload =
+      normalizeTransportMode(row.mode) === 'delta'
+        ? {
+            mode: 'delta',
+            baseSequence: Number(row.baseSequence || 0),
+            envelopes: this.listHostedSyncEnvelopesSince(Number(row.baseSequence || 0)),
+          }
+        : {
+            mode: 'snapshot',
+            bundleVersion: CALENDAR_BUNDLE_VERSION,
+            bundleGzipBase64: zlib
+              .gzipSync(Buffer.from(serializeCalendarBundle(bundle), 'utf8'))
+              .toString('base64'),
+          };
+
+    this.db
+      .prepare(
+        `UPDATE local_transport_sessions
+         SET closed_at = :closedAt
+         WHERE session_id = :sessionId`
+      )
+      .run({
+        sessionId,
+        closedAt: nowIso(),
+      });
+
+    this.logSecurityEvent('local_transport_session_consumed', {
+      targetType: 'transport',
+      targetId: sessionId,
+      details: {
+        mode: row.mode,
+        device,
+      },
+    });
+
+    return {
+      sessionId,
+      approvalId: row.approvalId,
+      payload,
+    };
+  }
+
   createEvent(input) {
     const sanitized = sanitizeEventCreateInput(input);
+
+    if (this.shouldSyncProviderInvite(sanitized)) {
+      return this.createEventWithOutboundInvite(sanitized);
+    }
+
     this.maybeMarkDemoSeedModified();
     this.withTransaction(() => {
       this.insertEventRecord(sanitized, { deviceId: this.deviceId });
     });
+    return this.snapshot();
+  }
+
+  async createEventWithOutboundInvite(sanitized) {
+    const outboundSync = await this.pushOutboundInvite(sanitized, null);
+    const eventInput = outboundSync
+      ? {
+          ...sanitized,
+          ...outboundSync.eventPatch,
+        }
+      : sanitized;
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      const createdEvent = this.insertEventRecord(eventInput, { deviceId: this.deviceId });
+      if (outboundSync?.linkInput) {
+        this.upsertExternalEventLink({
+          ...outboundSync.linkInput,
+          eventId: createdEvent.id,
+        });
+      }
+    });
+
     return this.snapshot();
   }
 
@@ -1853,6 +3435,17 @@ class CalendarStore {
       throw new Error('Event end time must be after the start time.');
     }
 
+    if (this.shouldSyncProviderInvite(nextEvent)) {
+      return this.updateEventWithOutboundInvite(event, nextEvent);
+    }
+
+    return this.applyLocalEventUpdate(event, nextEvent, {
+      detachImported: true,
+      detachOutbound: normalizeInviteDeliveryMode(nextEvent.inviteDeliveryMode) === 'local_only',
+    });
+  }
+
+  applyLocalEventUpdate(event, nextEvent, options = {}) {
     const nextContent = this.buildEventContent(nextEvent);
     const currentContent = {
       title: event.title,
@@ -1860,12 +3453,19 @@ class CalendarStore {
       groupName: event.groupName,
       location: event.location || '',
       people: event.people || [],
+      inviteRecipients: event.inviteRecipients || [],
+      sourceTimeZone: event.sourceTimeZone || '',
       reminderMinutesBeforeStart: event.reminderMinutesBeforeStart ?? null,
       desktopNotificationEnabled: Boolean(event.desktopNotificationEnabled),
       emailNotificationEnabled: Boolean(event.emailNotificationEnabled),
       emailNotificationRecipients: event.emailNotificationRecipients || [],
       notifications: normalizeStoredNotifications(event),
       tags: event.tags,
+      inviteTargetAccountId: event.inviteTargetAccountId || '',
+      inviteTargetProvider: normalizeInviteProvider(event.inviteTargetProvider),
+      inviteTargetCalendarId: event.inviteTargetCalendarId || '',
+      inviteDeliveryMode: normalizeInviteDeliveryMode(event.inviteDeliveryMode),
+      lastInviteError: event.lastInviteError || '',
       externalProviderLinks: event.externalProviderLinks || [],
     };
 
@@ -1877,6 +3477,7 @@ class CalendarStore {
       'hasDeadline',
       'startsAt',
       'endsAt',
+      'isAllDay',
       'color',
       'syncPolicy',
       'visibility',
@@ -1889,7 +3490,13 @@ class CalendarStore {
     const contentChanged =
       JSON.stringify(nextContent) !== JSON.stringify(currentContent);
 
-    if (Object.keys(metadataPatch).length === 0 && !contentChanged) {
+    if (
+      Object.keys(metadataPatch).length === 0 &&
+      !contentChanged &&
+      !options.outboundLinkInput &&
+      !options.detachOutbound &&
+      !options.detachPreviousOutbound
+    ) {
       return this.snapshot();
     }
 
@@ -1906,6 +3513,7 @@ class CalendarStore {
                has_deadline = :hasDeadline,
                starts_at = :startsAt,
                ends_at = :endsAt,
+               is_all_day = :isAllDay,
                color = :color,
                sync_policy = :syncPolicy,
                visibility = :visibility,
@@ -1921,6 +3529,7 @@ class CalendarStore {
           hasDeadline: nextEvent.hasDeadline ? 1 : 0,
           startsAt: nextEvent.startsAt,
           endsAt: nextEvent.endsAt,
+          isAllDay: nextEvent.isAllDay ? 1 : 0,
           color: nextEvent.color,
           syncPolicy: nextEvent.syncPolicy,
           visibility: nextEvent.visibility,
@@ -1970,6 +3579,17 @@ class CalendarStore {
         }
 
         if (
+          JSON.stringify(nextContent.inviteRecipients) !==
+          JSON.stringify(currentContent.inviteRecipients)
+        ) {
+          changePatch.inviteRecipients = nextContent.inviteRecipients;
+        }
+
+        if (nextContent.sourceTimeZone !== currentContent.sourceTimeZone) {
+          changePatch.sourceTimeZone = nextContent.sourceTimeZone;
+        }
+
+        if (
           nextContent.reminderMinutesBeforeStart !== currentContent.reminderMinutesBeforeStart
         ) {
           changePatch.reminderMinutesBeforeStart = nextContent.reminderMinutesBeforeStart;
@@ -2003,12 +3623,43 @@ class CalendarStore {
           changePatch.tags = nextContent.tags;
         }
 
+        for (const field of [
+          'inviteTargetAccountId',
+          'inviteTargetProvider',
+          'inviteTargetCalendarId',
+          'inviteDeliveryMode',
+          'lastInviteError',
+        ]) {
+          if (JSON.stringify(nextContent[field]) !== JSON.stringify(currentContent[field])) {
+            changePatch[field] = nextContent[field];
+          }
+        }
+
         if (
           JSON.stringify(nextContent.externalProviderLinks) !==
           JSON.stringify(currentContent.externalProviderLinks)
         ) {
           changePatch.externalProviderLinks = nextContent.externalProviderLinks;
         }
+      }
+
+      if (options.detachImported !== false) {
+        this.updateExternalLinkStatus(event.id, 'detached', { linkMode: 'imported' });
+      }
+
+      if (options.detachOutbound) {
+        this.updateExternalLinkStatus(event.id, 'detached', { linkMode: 'outbound' });
+      }
+
+      if (options.detachPreviousOutbound) {
+        this.updateExternalLinkStatus(event.id, 'detached', { linkMode: 'outbound' });
+      }
+
+      if (options.outboundLinkInput) {
+        this.upsertExternalEventLink({
+          ...options.outboundLinkInput,
+          eventId: event.id,
+        });
       }
 
       this.recordChange({
@@ -2024,10 +3675,35 @@ class CalendarStore {
     return this.snapshot();
   }
 
+  async updateEventWithOutboundInvite(event, nextEvent) {
+    const outboundSync = await this.pushOutboundInvite(nextEvent, event);
+    const eventInput = outboundSync
+      ? {
+          ...nextEvent,
+          ...outboundSync.eventPatch,
+        }
+      : nextEvent;
+
+    return this.applyLocalEventUpdate(event, eventInput, {
+      detachImported: true,
+      detachPreviousOutbound: outboundSync?.detachPreviousOutbound,
+      outboundLinkInput: outboundSync?.linkInput || null,
+    });
+  }
+
   deleteEvent(eventId) {
     const event = this.getEventById(eventId);
     if (!event || event.deleted) {
       throw new Error('Event not found');
+    }
+
+    const outboundLinks = this.listExternalEventLinks({
+      eventId,
+      syncStatus: 'active',
+      linkMode: 'outbound',
+    });
+    if (outboundLinks.length > 0) {
+      return this.deleteEventWithOutboundInvites(event, outboundLinks);
     }
 
     this.maybeMarkDemoSeedModified();
@@ -2046,9 +3722,57 @@ class CalendarStore {
           updatedBy: this.deviceId,
         });
 
+      this.updateExternalLinkStatus(eventId, 'detached', { linkMode: 'imported' });
+
       this.recordChange({
         entity: 'event',
         entityId: eventId,
+        operation: 'delete',
+        patch: { deleted: true },
+        deviceId: this.deviceId,
+        signatureKeyId: this.deviceId,
+      });
+    });
+
+    return this.snapshot();
+  }
+
+  async deleteEventWithOutboundInvites(event, outboundLinks = []) {
+    for (const link of outboundLinks) {
+      const source = this.getExternalCalendarSourceById(link.sourceId);
+      if (!source) {
+        continue;
+      }
+
+      await this.oauthService.deleteOutboundCalendarEvent({
+        accountId: source.accountId,
+        remoteCalendarId: source.remoteCalendarId,
+        remoteEventId: link.remoteEventId,
+      });
+    }
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      this.db
+        .prepare(
+          `UPDATE event_metadata
+           SET deleted = 1,
+               updated_at = :updatedAt,
+               updated_by = :updatedBy
+           WHERE id = :id`
+        )
+        .run({
+          id: event.id,
+          updatedAt: nowIso(),
+          updatedBy: this.deviceId,
+        });
+
+      this.updateExternalLinkStatus(event.id, 'detached', { linkMode: 'imported' });
+      this.updateExternalLinkStatus(event.id, 'removed', { linkMode: 'outbound' });
+
+      this.recordChange({
+        entity: 'event',
+        entityId: event.id,
         operation: 'delete',
         patch: { deleted: true },
         deviceId: this.deviceId,
@@ -2065,6 +3789,27 @@ class CalendarStore {
 
   getAvailableProviders() {
     return this.oauthService.getProviders();
+  }
+
+  getOAuthClientConfig() {
+    return this.oauthService.getClientConfigSnapshot();
+  }
+
+  updateOAuthClientConfig(input = {}) {
+    const clientConfig = this.oauthService.updateClientConfig(input);
+    this.logSecurityEvent('oauth_client_config_updated', {
+      targetType: 'oauth',
+      targetId: 'client-config',
+      details: {
+        googleConfigured: Boolean(clientConfig.google?.clientIdConfigured),
+        microsoftConfigured: Boolean(clientConfig.microsoft?.clientIdConfigured),
+      },
+    });
+
+    return {
+      clientConfig,
+      security: this.getSecuritySnapshot(),
+    };
   }
 
   startOAuthConnect(provider, accessLevel = 'read') {

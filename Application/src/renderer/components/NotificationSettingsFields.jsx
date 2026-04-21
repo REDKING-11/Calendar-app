@@ -41,13 +41,9 @@ function getProviderLabel(providerId) {
     return 'Google';
   }
   if (providerId === 'microsoft') {
-    return 'Microsoft';
+    return 'Outlook';
   }
   return providerId;
-}
-
-function getConfiguredProvider(providerId, providers = []) {
-  return (providers || []).find((provider) => provider.id === providerId) || null;
 }
 
 function getProviderUpgradeCopy(providerId, connectedAccounts = []) {
@@ -251,8 +247,8 @@ export default function NotificationSettingsFields({
   onFieldChange,
   knownNotificationEmails = [],
   connectedAccounts = [],
-  providers = [],
   onConnectProvider,
+  onOpenConnectionSettings,
   oauthBusyProvider = '',
   oauthStatusMessage = '',
   compact = false,
@@ -377,13 +373,14 @@ export default function NotificationSettingsFields({
       {showConnectActions ? (
         <div className="notification-connect-block">
           <p className="notification-helper-copy">
-            {requiredProviders.length === 1
+            {onOpenConnectionSettings
+              ? 'Open Settings to connect Google or Outlook for email reminders.'
+              : requiredProviders.length === 1
               ? getProviderUpgradeCopy(requiredProviders[0], connectedAccounts)
               : 'Connect Google or Microsoft with mail access to send email reminders.'}
           </p>
           <div className="notification-connect-actions">
             {requiredProviders.map((providerId) => {
-              const provider = getConfiguredProvider(providerId, providers);
               const label = getProviderLabel(providerId);
               const providerAccounts = connectedAccounts.filter(
                 (account) => account.provider === providerId
@@ -396,10 +393,19 @@ export default function NotificationSettingsFields({
                   key={providerId}
                   type="button"
                   className="app-button app-button--secondary"
-                  onClick={() => onConnectProvider?.(providerId)}
-                  disabled={!provider?.configured || oauthBusyProvider === providerId}
+                  onClick={() =>
+                    onOpenConnectionSettings
+                      ? onOpenConnectionSettings(providerId)
+                      : onConnectProvider?.(providerId)
+                  }
+                  disabled={!onOpenConnectionSettings && oauthBusyProvider === providerId}
+                  title="Manage Google and Outlook connections in Settings"
                 >
-                  {oauthBusyProvider === providerId ? `Connecting ${label}...` : actionLabel}
+                  {onOpenConnectionSettings
+                    ? 'Open settings'
+                    : oauthBusyProvider === providerId
+                      ? `Connecting ${label}...`
+                      : actionLabel}
                 </button>
               );
             })}

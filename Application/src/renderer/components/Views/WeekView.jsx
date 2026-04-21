@@ -4,6 +4,7 @@ import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
 import { createClickIntentRouter } from '../../clickIntent';
+import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
 const HOUR_HEIGHT = 64;
 const HOURS = Array.from({ length: 24 }, (_, index) => index);
@@ -46,7 +47,14 @@ function getAnchorFromElement(element) {
   };
 }
 
+function focusWeekTarget(sourceElement, selector) {
+  const calendarElement = sourceElement.closest('[data-calendar-grid="week"]');
+  const nextElement = calendarElement?.querySelector(selector);
+  window.requestAnimationFrame(() => nextElement?.focus({ preventScroll: true }));
+}
+
 export default function WeekView({
+  headerRef,
   events,
   preferences,
   timeZone,
@@ -114,6 +122,40 @@ export default function WeekView({
     onSelectDate?.(new Date());
   };
 
+  const openSlotFromKeyboard = (keyboardEvent, day, hour, openInDrawer = false) => {
+    const slotDate = new Date(day.date);
+    slotDate.setHours(hour, 0, 0, 0);
+    const payload = {
+      date: slotDate,
+      anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
+      selectedDayDate: day.date,
+    };
+
+    if (openInDrawer) {
+      slotHandlersRef.current.onDouble(payload);
+    } else {
+      slotHandlersRef.current.onSingle(payload);
+    }
+  };
+
+  const handleEventKeyboardOpen = (keyboardEvent, event) => {
+    if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') {
+      return;
+    }
+
+    keyboardEvent.preventDefault();
+    const payload = {
+      event,
+      anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
+    };
+
+    if (keyboardEvent.ctrlKey || keyboardEvent.shiftKey) {
+      eventHandlersRef.current.onDouble(payload);
+    } else {
+      eventHandlersRef.current.onSingle(payload);
+    }
+  };
+
   useEffect(() => {
     return () => {
       slotClickRouterRef.current?.cancelPending();
@@ -124,6 +166,7 @@ export default function WeekView({
   return (
     <section className="calendar-card relative flex h-full min-h-0 flex-col overflow-hidden">
       <CalendarViewHeader
+        headerRef={headerRef}
         eyebrow="Week view"
         title={weekTitle}
         titleTone="compact"
@@ -143,10 +186,10 @@ export default function WeekView({
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
-      <div className="week-timeline min-h-0 flex-1">
+      <div className="week-timeline min-h-0 flex-1" data-calendar-grid="week">
         <div className="week-timeline-header">
           <div className="week-time-corner" />
-          {weekDays.map((day) => (
+          {weekDays.map((day, dayIndex) => (
             <button
               key={day.key}
               type="button"
@@ -158,6 +201,22 @@ export default function WeekView({
                 .filter(Boolean)
                 .join(' ')}
               onClick={() => onSelectDate?.(day.date)}
+              data-week-day-index={dayIndex}
+              data-calendar-focus={day.isSelected ? 'active' : day.isToday ? 'today' : dayIndex === 0 ? 'first' : undefined}
+              onKeyDown={(keyboardEvent) => {
+                if (!isGridNavigationKey(keyboardEvent.key)) {
+                  return;
+                }
+
+                keyboardEvent.preventDefault();
+                const nextIndex = getGridNavigationIndex({
+                  currentIndex: dayIndex,
+                  itemCount: weekDays.length,
+                  columnCount: weekDays.length,
+                  key: keyboardEvent.key,
+                });
+                focusWeekTarget(keyboardEvent.currentTarget, `[data-week-day-index="${nextIndex}"]`);
+              }}
             >
               <p className="week-header-label">{day.label}</p>
               <p className="week-header-date">{day.date.getDate()}</p>
@@ -178,34 +237,67 @@ export default function WeekView({
             ))}
           </div>
 
-          {weekDays.map((day) => (
+          {weekDays.map((day, dayIndex) => (
             <div key={day.key} className="week-day-column">
               <div className="week-day-slots">
-                {HOURS.map((hour) => (
-                  <button
-                    key={`${day.key}-${hour}`}
-                    type="button"
-                    className="week-hour-slot"
-                    onClick={(event) => {
-                      const slotDate = new Date(day.date);
-                      slotDate.setHours(hour, 0, 0, 0);
-                      slotClickRouterRef.current.handleSingle({
-                        date: slotDate,
-                        anchorPoint: { x: event.clientX, y: event.clientY },
-                        selectedDayDate: day.date,
-                      });
-                    }}
-                    onDoubleClick={() => {
-                      const slotDate = new Date(day.date);
-                      slotDate.setHours(hour, 0, 0, 0);
-                      slotClickRouterRef.current.handleDouble({
-                        date: slotDate,
-                        selectedDayDate: day.date,
-                      });
-                    }}
-                    title="Add an event here"
-                  />
-                ))}
+                {HOURS.map((hour, hourIndex) => {
+                  const slotIndex = hourIndex * weekDays.length + dayIndex;
+
+                  return (
+                    <button
+                      key={`${day.key}-${hour}`}
+                      type="button"
+                      className="week-hour-slot"
+                      data-week-slot-index={slotIndex}
+                      onClick={(event) => {
+                        const slotDate = new Date(day.date);
+                        slotDate.setHours(hour, 0, 0, 0);
+                        slotClickRouterRef.current.handleSingle({
+                          date: slotDate,
+                          anchorPoint: { x: event.clientX, y: event.clientY },
+                          selectedDayDate: day.date,
+                        });
+                      }}
+                      onDoubleClick={() => {
+                        const slotDate = new Date(day.date);
+                        slotDate.setHours(hour, 0, 0, 0);
+                        slotClickRouterRef.current.handleDouble({
+                          date: slotDate,
+                          selectedDayDate: day.date,
+                        });
+                      }}
+                      onKeyDown={(keyboardEvent) => {
+                        if (isGridNavigationKey(keyboardEvent.key)) {
+                          keyboardEvent.preventDefault();
+                          const nextIndex = getGridNavigationIndex({
+                            currentIndex: slotIndex,
+                            itemCount: HOURS.length * weekDays.length,
+                            columnCount: weekDays.length,
+                            key: keyboardEvent.key,
+                          });
+                          focusWeekTarget(keyboardEvent.currentTarget, `[data-week-slot-index="${nextIndex}"]`);
+                          return;
+                        }
+
+                        if (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') {
+                          keyboardEvent.preventDefault();
+                          openSlotFromKeyboard(
+                            keyboardEvent,
+                            day,
+                            hour,
+                            keyboardEvent.ctrlKey || keyboardEvent.shiftKey
+                          );
+                        }
+                      }}
+                      aria-label={`Add an event on ${day.date.toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                      })} at ${String(hour).padStart(2, '0')}:00`}
+                      title="Add an event here"
+                    />
+                  );
+                })}
               </div>
 
               <div className="week-event-layer">
@@ -213,8 +305,9 @@ export default function WeekView({
                   const layout = getEventLayout(event);
 
                   return (
-                    <article
+                    <button
                       key={event.id}
+                      type="button"
                       className={`week-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
                       style={{
                         top: `${layout.top}px`,
@@ -232,11 +325,12 @@ export default function WeekView({
                           event,
                         })
                       }
+                      onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
                     >
                       <p className="calendar-event-card-title">{event.title}</p>
                       <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
                       <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
-                    </article>
+                    </button>
                   );
                 })}
               </div>
