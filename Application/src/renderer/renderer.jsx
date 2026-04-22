@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import AboutDrawer from './components/AboutDrawer';
 import CalendarViewport from './components/CalendarViewport';
+import DebugPanel from './components/DebugPanel';
 import EventComposerDrawer from './components/EventComposerDrawer';
 import Header from './components/Header';
 import Introduction from './components/introduction';
@@ -23,12 +24,15 @@ import {
   createDraftEventFromEvent,
   createEmptyDraftEvent,
   DEFAULT_NOTIFICATION_REMINDER_MINUTES,
+  EVENT_TITLE_MAX_LENGTH,
   extractInviteeEmails,
   formatDateForInput,
   formatTimeForInput,
   getDraftDurationMinutes,
   getDraftEndDate,
   getDraftStartDate,
+  isValidEmailAddress,
+  normalizeEmailAddress,
   isDraftEventValid,
   normalizeNotificationDrafts,
   normalizeNotificationRecipients,
@@ -45,8 +49,14 @@ import {
 import {
   focusFirstAvailable,
   getRegionShortcutTarget,
+  isEditableTarget,
 } from './keyboardNavigation';
 import { STORAGE_KEYS, useCalendarPreferences, updatePreference } from './preferences';
+import {
+  buildDebugSnapshot,
+  isDeveloperShortcut,
+  recordAppError,
+} from './debug-tools';
 import './styles.css';
 
 const HOLIDAY_PRELOAD_STATUS = {
@@ -167,15 +177,15 @@ function collectKnownNotificationEmails(preferences, connectedAccounts = []) {
   const knownEmails = new Set();
 
   for (const account of connectedAccounts) {
-    const normalizedEmail = String(account?.email || '').trim().toLowerCase();
-    if (normalizedEmail) {
+    const normalizedEmail = normalizeEmailAddress(account?.email);
+    if (normalizedEmail && isValidEmailAddress(normalizedEmail)) {
       knownEmails.add(normalizedEmail);
     }
   }
 
   for (const value of [preferences.notificationEmail, preferences.hostedEmail]) {
-    const normalizedEmail = String(value || '').trim().toLowerCase();
-    if (normalizedEmail) {
+    const normalizedEmail = normalizeEmailAddress(value);
+    if (normalizedEmail && isValidEmailAddress(normalizedEmail)) {
       knownEmails.add(normalizedEmail);
     }
   }
@@ -199,16 +209,17 @@ function getEligibleSenderAccount(scope = 'internal', connectedAccounts = []) {
 function getDefaultNotificationRecipient(scope, connectedAccounts, knownNotificationEmails, preferences) {
   const senderAccount = getEligibleSenderAccount(scope, connectedAccounts);
   if (senderAccount?.email) {
-    return String(senderAccount.email).trim().toLowerCase();
+    const normalizedEmail = normalizeEmailAddress(senderAccount.email);
+    return isValidEmailAddress(normalizedEmail) ? normalizedEmail : '';
   }
 
-  const preferredEmail = String(preferences.notificationEmail || '').trim().toLowerCase();
-  if (preferredEmail) {
+  const preferredEmail = normalizeEmailAddress(preferences.notificationEmail);
+  if (preferredEmail && isValidEmailAddress(preferredEmail)) {
     return preferredEmail;
   }
 
-  const hostedEmail = String(preferences.hostedEmail || '').trim().toLowerCase();
-  if (hostedEmail) {
+  const hostedEmail = normalizeEmailAddress(preferences.hostedEmail);
+  if (hostedEmail && isValidEmailAddress(hostedEmail)) {
     return hostedEmail;
   }
 
@@ -361,6 +372,10 @@ function App() {
   const [activeTagFilters, setActiveTagFilters] = useState([]);
   const [isUpcomingOpen, setIsUpcomingOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
+  const [isDebugSetupOpen, setIsDebugSetupOpen] = useState(false);
+  const [debugStatusMessage, setDebugStatusMessage] = useState('');
+  const [lastAppError, setLastAppError] = useState(null);
   const [isSetupComplete, setIsSetupComplete] = useState(() => {
     if (typeof window === 'undefined') {
       return true;
@@ -400,6 +415,24 @@ function App() {
   const calendarViewRegionRef = useRef(null);
   const oauthPollingRef = useRef(null);
   const oauthPollingDeadlineRef = useRef(0);
+  const debugStatusTimerRef = useRef(null);
+
+  const rememberAppError = (error, source = 'app') => {
+    const nextError = recordAppError(error, source);
+    setLastAppError(nextError);
+    return nextError;
+  };
+
+  const showDebugStatus = (message) => {
+    setDebugStatusMessage(message);
+    if (debugStatusTimerRef.current) {
+      window.clearTimeout(debugStatusTimerRef.current);
+    }
+    debugStatusTimerRef.current = window.setTimeout(() => {
+      setDebugStatusMessage('');
+      debugStatusTimerRef.current = null;
+    }, 2400);
+  };
 
   const refreshSnapshot = async () => {
     const nextSnapshot = await window.calendarApp.getSnapshot();
@@ -438,6 +471,44 @@ function App() {
   }, [snapshot]);
 
   useEffect(() => () => stopOAuthPolling(), []);
+
+  useEffect(
+    () => () => {
+      if (debugStatusTimerRef.current) {
+        window.clearTimeout(debugStatusTimerRef.current);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const handleDeveloperShortcut = (keyboardEvent) => {
+      if (!isDeveloperShortcut(keyboardEvent) || isEditableTarget(keyboardEvent.target)) {
+        return;
+      }
+
+      keyboardEvent.preventDefault();
+      updatePreference(setPreferences, {
+        developerMode: preferences.developerMode !== true,
+      });
+      setIsDebugPanelOpen(preferences.developerMode !== true);
+      showDebugStatus(
+        preferences.developerMode === true ? 'Developer mode disabled.' : 'Developer mode enabled.'
+      );
+    };
+
+    window.addEventListener('keydown', handleDeveloperShortcut);
+    return () => window.removeEventListener('keydown', handleDeveloperShortcut);
+  }, [preferences.developerMode, setPreferences]);
+
+  useEffect(() => {
+    if (preferences.developerMode === true) {
+      return;
+    }
+
+    setIsDebugPanelOpen(false);
+    setIsDebugSetupOpen(false);
+  }, [preferences.developerMode]);
 
   useEffect(() => {
     if (!hostedUrl && snapshot?.security?.hosted?.baseUrl) {
@@ -499,7 +570,8 @@ function App() {
       });
 
       return preloadResult;
-    } catch {
+    } catch (error) {
+      rememberAppError(error, 'holiday-preload');
       if (holidayPreloadRequestRef.current !== requestId) {
         return null;
       }
@@ -545,7 +617,8 @@ function App() {
       return {
         warning: result?.warning || '',
       };
-    } catch {
+    } catch (error) {
+      rememberAppError(error, 'holiday-import');
       setHolidayPreloadState({
         countryCode,
         status: HOLIDAY_PRELOAD_STATUS.error,
@@ -657,6 +730,50 @@ function App() {
         )
       ),
     [events, draftEvent, activeEvent?.id, preferences.defaultEventDuration]
+  );
+  const debugSnapshot = useMemo(
+    () =>
+      buildDebugSnapshot({
+        windowMode,
+        isSetupComplete,
+        preferences,
+        effectiveTheme,
+        calendarView,
+        selectedDate,
+        snapshot,
+        visibleEvents,
+        availableTags,
+        connectedAccounts,
+        hostedBusyAction,
+        holidayPreloadState,
+        oauthBusyProvider,
+        oauthPollingActive: Boolean(oauthPollingRef.current),
+        externalCalendarsByAccount,
+        composerState,
+        isUpcomingOpen,
+        isAboutOpen,
+        lastAppError,
+      }),
+    [
+      windowMode,
+      isSetupComplete,
+      preferences,
+      effectiveTheme,
+      calendarView,
+      selectedDate,
+      snapshot,
+      visibleEvents,
+      availableTags,
+      connectedAccounts,
+      hostedBusyAction,
+      holidayPreloadState,
+      oauthBusyProvider,
+      externalCalendarsByAccount,
+      composerState,
+      isUpcomingOpen,
+      isAboutOpen,
+      lastAppError,
+    ]
   );
 
   const closeComposer = () => {
@@ -792,9 +909,16 @@ function App() {
 
   const handleDraftFieldChange = (name, value) => {
     setDraftEvent((current) => {
+      const normalizedValue =
+        name === 'title'
+          ? String(value ?? '')
+              .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+              .replace(/[<>]/g, '')
+              .slice(0, EVENT_TITLE_MAX_LENGTH)
+          : value;
       const nextDraft = {
         ...current,
-        [name]: value,
+        [name]: normalizedValue,
       };
 
       if (name === 'notifications') {
@@ -1039,6 +1163,7 @@ function App() {
         },
       }));
     } catch (error) {
+      rememberAppError(error, 'external-calendar-list');
       setExternalCalendarsByAccount((current) => ({
         ...current,
         [accountId]: {
@@ -1087,6 +1212,7 @@ function App() {
       setSelectedDate(new Date(payload.startsAt));
       closeComposer();
     } catch (error) {
+      rememberAppError(error, composerState.mode === 'edit' ? 'event-update' : 'event-create');
       setComposerStatusMessage(error?.message || 'The event could not be saved.');
       setPendingInviteConfirmation(null);
     }
@@ -1157,6 +1283,7 @@ function App() {
       setSnapshot(nextSnapshot);
       closeComposer();
     } catch (error) {
+      rememberAppError(error, 'event-delete');
       setComposerStatusMessage(error?.message || 'The event could not be deleted.');
     }
   };
@@ -1182,6 +1309,7 @@ function App() {
       }
       return result;
     } catch (error) {
+      rememberAppError(error, `hosted-${actionKey}`);
       const fallbackMessage =
         error?.message || 'The hosted backend action could not be completed.';
       setHostedStatusMessage(fallbackMessage);
@@ -1245,11 +1373,13 @@ function App() {
               `${providerLabel} sign-in is still pending. You can keep the browser flow open and try again from notifications later.`
             );
           }
-        } catch {
+        } catch (error) {
+          rememberAppError(error, 'oauth-polling-refresh');
           // Keep waiting for the browser callback to complete.
         }
       }, 3000);
     } catch (error) {
+      rememberAppError(error, `oauth-start-${provider}`);
       stopOAuthPolling();
       setOAuthBusyProvider('');
       setOAuthStatusMessage(error?.message || `${providerLabel} sign-in could not be started.`);
@@ -1258,7 +1388,13 @@ function App() {
 
   const handleSaveOAuthClientConfig = async (clientConfigDraft) => {
     setOAuthStatusMessage('');
-    const result = await window.calendarApp.updateOAuthClientConfig(clientConfigDraft);
+    let result;
+    try {
+      result = await window.calendarApp.updateOAuthClientConfig(clientConfigDraft);
+    } catch (error) {
+      rememberAppError(error, 'oauth-config-save');
+      throw error;
+    }
     if (result?.security) {
       setSnapshot((current) => {
         const nextSnapshot = {
@@ -1281,6 +1417,7 @@ function App() {
       await openSettingsExperience();
       setOAuthStatusMessage('Use Settings to configure and connect Google or Outlook accounts.');
     } catch (error) {
+      rememberAppError(error, 'open-settings');
       setOAuthStatusMessage(error?.message || 'Settings could not be opened.');
     }
   };
@@ -1308,6 +1445,7 @@ function App() {
       }
       setOAuthStatusMessage('Account disconnected locally.');
     } catch (error) {
+      rememberAppError(error, 'account-disconnect');
       setOAuthStatusMessage(error?.message || 'The account could not be disconnected.');
     } finally {
       setAccountBusyId('');
@@ -1344,10 +1482,57 @@ function App() {
       }
       setOAuthStatusMessage('Account revoked.');
     } catch (error) {
+      rememberAppError(error, 'account-revoke');
       setOAuthStatusMessage(error?.message || 'The account could not be revoked.');
     } finally {
       setAccountBusyId('');
     }
+  };
+
+  const handleDebugOpenSetup = () => {
+    closeComposer();
+    setIsUpcomingOpen(false);
+    setIsAboutOpen(false);
+    setIsDebugSetupOpen(true);
+    setIsDebugPanelOpen(false);
+  };
+
+  const handleDebugOpenSettings = async () => {
+    try {
+      await openSettingsExperience();
+    } catch (error) {
+      rememberAppError(error, 'debug-open-settings');
+      showDebugStatus(error?.message || 'Settings could not be opened.');
+    }
+  };
+
+  const handleDebugRefreshSnapshot = async () => {
+    try {
+      await refreshSnapshot();
+      showDebugStatus('Snapshot refreshed.');
+    } catch (error) {
+      rememberAppError(error, 'debug-refresh-snapshot');
+      showDebugStatus(error?.message || 'Snapshot refresh failed.');
+    }
+  };
+
+  const handleDebugOpenComposer = () => {
+    setIsDebugPanelOpen(false);
+    openDrawerComposer({ date: selectedDate || new Date() });
+  };
+
+  const handleDebugOpenUpcoming = () => {
+    setIsDebugPanelOpen(false);
+    setIsAboutOpen(false);
+    closeComposer();
+    setIsUpcomingOpen(true);
+  };
+
+  const handleDebugOpenAbout = () => {
+    setIsDebugPanelOpen(false);
+    closeComposer();
+    setIsUpcomingOpen(false);
+    setIsAboutOpen(true);
   };
 
   useEffect(() => {
@@ -1549,7 +1734,13 @@ function App() {
           oauthBusyProvider={oauthBusyProvider}
           accountBusyId={accountBusyId}
           oauthStatusMessage={oauthStatusMessage}
+          debugSnapshot={debugSnapshot}
         />
+        {debugStatusMessage ? (
+          <div className="debug-toast" role="status">
+            {debugStatusMessage}
+          </div>
+        ) : null}
       </>
     );
   }
@@ -1590,10 +1781,12 @@ function App() {
             regionRef={appHeaderRegionRef}
             eventCount={snapshot?.stats?.activeEventCount || 0}
             onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
+            onOpenDebug={() => setIsDebugPanelOpen((current) => !current)}
             onOpenAbout={() => setIsAboutOpen(true)}
             onOpenSettings={() => {
               void openSettingsExperience();
             }}
+            developerMode={preferences.developerMode === true}
             timeZone={preferences.timeZone}
           />
 
@@ -1630,6 +1823,54 @@ function App() {
           </main>
         </div>
       </div>
+
+      {debugStatusMessage ? (
+        <div className="debug-toast" role="status">
+          {debugStatusMessage}
+        </div>
+      ) : null}
+
+      {preferences.developerMode === true && isDebugPanelOpen ? (
+        <DebugPanel
+          debugSnapshot={debugSnapshot}
+          onOpenSetup={handleDebugOpenSetup}
+          onOpenSettings={handleDebugOpenSettings}
+          onOpenAbout={handleDebugOpenAbout}
+          onOpenComposer={handleDebugOpenComposer}
+          onOpenUpcoming={handleDebugOpenUpcoming}
+          onRefreshSnapshot={handleDebugRefreshSnapshot}
+        />
+      ) : null}
+
+      {preferences.developerMode === true && isDebugSetupOpen ? (
+        <div className="debug-setup-overlay" role="presentation">
+          <div className="debug-setup-panel">
+            <Introduction
+              isOpen
+              variant="onboarding"
+              preloadState={holidayPreloadState}
+              onCountryChange={prepareHolidayPreload}
+              onOpenChange={() => setIsDebugSetupOpen(false)}
+              onSavePreferences={async (values) => {
+                const result = await importHolidayPreferences(values);
+                setIsDebugSetupOpen(false);
+                return result;
+              }}
+              onSkip={() => setIsDebugSetupOpen(false)}
+              connectedAccounts={connectedAccounts}
+              providers={notificationProviders}
+              oauthClientConfig={oauthClientConfig}
+              onConnectProvider={handleStartOAuthConnect}
+              onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+              onDisconnectAccount={handleDisconnectAccount}
+              onRevokeAccount={handleRevokeAccount}
+              oauthBusyProvider={oauthBusyProvider}
+              accountBusyId={accountBusyId}
+              oauthStatusMessage={oauthStatusMessage}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <QuickEventPopover
         isOpen={isQuickComposerOpen}

@@ -133,12 +133,6 @@ export default function MonthView({
         onNext={goToNextMonth}
         previousLabel="Previous month"
         nextLabel="Next month"
-        onAddEvent={(event) =>
-          onCreateEvent?.({
-            date: selectedDate || viewDate,
-            anchorPoint: getAnchorFromElement(event.currentTarget),
-          })
-        }
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
@@ -244,7 +238,13 @@ export default function MonthView({
                 <button
                   key={event.id}
                   type="button"
-                  className={`calendar-event-pill ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
+                  className={[
+                    'calendar-event-pill',
+                    tile.events.length > 1 ? 'calendar-event-pill--compact' : '',
+                    isFocusEvent(event) ? 'calendar-event-card--focus' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   style={{ backgroundColor: event.color || '#4f9d69' }}
                   onClick={(clickEvent) => {
                     clickEvent.stopPropagation();

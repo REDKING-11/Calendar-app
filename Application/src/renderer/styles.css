@@ -256,11 +256,43 @@ button {
   animation: orbitalGlowReverse 46s linear infinite, orbitalBand 28s ease-in-out infinite;
 }
 
+:root[data-background-motion='off'] .app-background-layer {
+  inset: -10%;
+}
+
+:root[data-background-motion='off'] .app-background-layer::before,
+:root[data-background-motion='off'] .app-background-layer::after {
+  animation: none;
+  transform: none;
+  will-change: auto;
+}
+
+:root[data-background-motion='off'] .app-background-layer::before {
+  background:
+    radial-gradient(ellipse at 14% 18%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 36%),
+    radial-gradient(ellipse at 84% 74%, color-mix(in srgb, var(--bg-accent) 40%, transparent), transparent 38%),
+    linear-gradient(145deg, transparent, color-mix(in srgb, var(--bg-accent-secondary) 28%, transparent));
+  background-repeat: no-repeat;
+  background-size: 56% 56%, 54% 54%, 100% 100%;
+  opacity: 0.62;
+  filter: none;
+}
+
+:root[data-background-motion='off'] .app-background-layer::after {
+  background: var(--background-band);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  mix-blend-mode: normal;
+  opacity: 0.22;
+  filter: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-background-layer::before,
   .app-background-layer::after {
     animation: none;
     transform: none;
+    will-change: auto;
   }
 
   .app-background-layer::before {
@@ -1038,7 +1070,9 @@ button {
 .week-hour-slot:focus-visible,
 .day-slot:focus-visible,
 .year-month-card:focus-visible,
-.day-detail-item-button:focus-visible {
+.day-detail-item-button:focus-visible,
+.day-detail-row:focus-visible,
+.day-detail-summary:focus-visible {
   outline: none;
   box-shadow:
     0 0 0 4px var(--focus-ring),
@@ -1070,6 +1104,7 @@ button {
   flex: 1;
   align-content: start;
   gap: clamp(4px, 0.5vw, 6px);
+  overflow: hidden;
 }
 
 .calendar-event-pill {
@@ -1317,6 +1352,24 @@ button {
   cursor: pointer;
 }
 
+.calendar-event-pill--compact {
+  min-height: 0;
+  height: 24px;
+  align-items: center;
+  gap: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
+.calendar-event-pill--compact .calendar-event-card-time,
+.calendar-event-pill--compact .calendar-event-card-context {
+  display: none;
+}
+
+.calendar-event-pill--compact .calendar-event-card-title {
+  line-height: 1;
+}
+
 .event-duration-chip--active {
   background: var(--button-primary-bg);
   border-color: transparent;
@@ -1522,8 +1575,11 @@ button {
 .year-month-card {
   display: flex;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
-  gap: 12px;
+  gap: clamp(6px, 1cqw, 12px);
+  container-type: inline-size;
+  overflow: hidden;
 }
 
 .week-header-day--selected {
@@ -1574,11 +1630,12 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: clamp(4px, 1.6cqw, 12px);
+  min-width: 0;
 }
 
 .year-month-meta {
-  font-size: 0.82rem;
+  font-size: clamp(0.58rem, 3.8cqw, 0.82rem);
   white-space: nowrap;
 }
 
@@ -1586,15 +1643,19 @@ button {
 .year-mini-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 6px;
+  gap: clamp(1px, 1.6cqw, 6px);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .year-mini-weekday,
 .year-mini-day {
   display: grid;
-  min-height: 20px;
+  min-width: 0;
+  min-height: clamp(10px, 5.4cqw, 20px);
   place-items: center;
-  font-size: clamp(0.72rem, 0.2vw + 0.68rem, 0.82rem);
+  font-size: clamp(0.5rem, 4.4cqw, 0.82rem);
+  line-height: 1;
 }
 
 .year-mini-weekday {
@@ -1942,52 +2003,125 @@ button {
   backdrop-filter: blur(18px);
 }
 
-.day-detail-card {
-  margin-top: clamp(14px, 1.2vw, 18px);
-  border: 1px solid rgba(29, 36, 51, 0.08);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.84);
-  padding: var(--card-padding);
-}
-
-.day-detail-card h3 {
-  margin: 0;
-  font-size: 1.6rem;
-}
-
-.day-detail-list {
-  margin-top: 16px;
+.day-detail-toggle {
   display: grid;
-  gap: 12px;
+  flex-shrink: 0;
+  gap: 10px;
+  margin-top: clamp(8px, 0.8vw, 12px);
 }
 
-.day-detail-item {
+.day-detail-summary {
   display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 16px;
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(244, 247, 252, 0.9);
-}
-
-.day-detail-item-button {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 14px;
   width: 100%;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
   cursor: pointer;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.day-detail-summary-main,
+.day-detail-summary-meta,
+.day-detail-row-body {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.day-detail-summary-main strong,
+.day-detail-summary-meta span,
+.day-detail-title,
+.day-detail-subtle,
+.day-detail-time,
+.day-detail-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-detail-summary-main strong {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+
+.day-detail-summary-meta {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.day-detail-summary-action {
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.day-detail-panel {
+  display: grid;
+  max-height: min(34vh, 320px);
+  gap: 8px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-primary) 78%, transparent);
+  padding: 10px;
+}
+
+.day-detail-row-wrap {
+  min-width: 0;
+}
+
+.day-detail-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.44fr) minmax(0, 1fr) minmax(72px, auto);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.day-detail-row--focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.day-detail-time,
+.day-detail-title {
+  font-weight: 800;
 }
 
 .day-detail-time {
-  font-weight: 700;
+  font-size: 0.85rem;
 }
 
-.day-detail-title {
-  font-weight: 700;
+.day-detail-subtle {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.day-detail-type {
+  justify-self: end;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 5px 8px;
 }
 
 .year-grid {
@@ -2492,6 +2626,121 @@ button {
   color: var(--warning-text);
 }
 
+.debug-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 80;
+  max-width: min(420px, calc(100vw - 48px));
+  border: 1px solid var(--border-color-strong);
+  border-radius: 14px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 700;
+  padding: 12px 16px;
+}
+
+.debug-panel {
+  position: fixed;
+  right: 24px;
+  top: 110px;
+  z-index: 70;
+  display: grid;
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 140px);
+  gap: 16px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color-strong);
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+}
+
+.debug-panel-header,
+.debug-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.debug-panel-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.debug-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.debug-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.debug-panel-card {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--surface-muted);
+  padding: 14px;
+}
+
+.debug-panel-card h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  font-weight: 800;
+}
+
+.debug-panel-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  padding-bottom: 6px;
+}
+
+.debug-panel-row strong {
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-panel-error {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.debug-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--bg-primary) 76%, transparent);
+  padding: 24px;
+}
+
+.debug-setup-panel {
+  width: min(980px, 100%);
+  margin: 0 auto;
+}
+
 .theme-preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2550,6 +2799,33 @@ button {
   scrollbar-gutter: stable;
   scrollbar-color: color-mix(in srgb, var(--accent) 54%, var(--border-color-strong)) color-mix(in srgb, var(--surface-muted) 66%, transparent);
   scrollbar-width: thin;
+}
+
+.intro-onboarding-shell {
+  display: block;
+  scrollbar-gutter: stable;
+  scrollbar-color: color-mix(in srgb, var(--accent) 54%, var(--border-color-strong)) color-mix(in srgb, var(--surface-muted) 66%, transparent);
+  scrollbar-width: thin;
+}
+
+.intro-onboarding-shell > .intro-surface {
+  margin: 0 auto;
+}
+
+.intro-onboarding-shell::-webkit-scrollbar {
+  width: 12px;
+}
+
+.intro-onboarding-shell::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--surface-muted) 66%, transparent);
+}
+
+.intro-onboarding-shell::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 72%, var(--button-primary-bg)) border-box;
+  background-clip: padding-box;
 }
 
 .about-drawer-panel::-webkit-scrollbar {
@@ -2648,7 +2924,10 @@ button {
 .year-month-card,
 .week-header-day,
 .day-detail-item,
-.day-detail-card {
+.day-detail-card,
+.day-detail-summary,
+.day-detail-panel,
+.day-detail-row {
   background: var(--surface-secondary);
   border-color: var(--border-color);
   color: var(--text-primary);
@@ -2681,6 +2960,7 @@ button {
 .year-month-meta,
 .day-detail-subtle,
 .day-detail-empty,
+.day-detail-type,
 .event-overview-label,
 .sidebar-month-picker-year,
 .day-zoom-sidebar-label,
@@ -2694,6 +2974,7 @@ button {
 .event-overview-value,
 .day-detail-title,
 .day-detail-time,
+.day-detail-summary-main strong,
 .year-mini-day,
 .week-header-date {
   color: var(--text-primary);
@@ -2704,6 +2985,7 @@ button {
 :root[data-theme='dark'] .week-header-label,
 :root[data-theme='dark'] .year-month-meta,
 :root[data-theme='dark'] .day-detail-subtle,
+:root[data-theme='dark'] .day-detail-type,
 :root[data-theme='dark'] .event-overview-label {
   color: var(--text-secondary);
 }
@@ -2717,7 +2999,10 @@ button {
 :root[data-theme='dark'] .week-header-day,
 :root[data-theme='dark'] .event-overview-card,
 :root[data-theme='dark'] .day-detail-item,
-:root[data-theme='dark'] .day-detail-card {
+:root[data-theme='dark'] .day-detail-card,
+:root[data-theme='dark'] .day-detail-summary,
+:root[data-theme='dark'] .day-detail-panel,
+:root[data-theme='dark'] .day-detail-row {
   background: var(--surface-secondary) !important;
   border-color: var(--border-color) !important;
   color: var(--text-primary);
@@ -2731,6 +3016,16 @@ button {
   .settings-page-hero,
   .about-header {
     flex-direction: column;
+  }
+
+  .day-detail-summary,
+  .day-detail-row {
+    grid-template-columns: 1fr;
+  }
+
+  .day-detail-summary-action,
+  .day-detail-type {
+    justify-self: start;
   }
 
   .settings-info-row {

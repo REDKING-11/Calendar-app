@@ -1,0 +1,343 @@
+Calendar App - Implementation Change Notes
+Date: 2026-04-22
+Format: plain text documentation summary
+
+This document records the main changes made during the April 22 work pass.
+It is written as a project note rather than a Git diff. The focus of this pass
+was performance control, UI cleanup, validation hardening, developer diagnostics,
+and smaller calendar usability fixes.
+
+
+1. Background animation performance control
+-------------------------------------------
+
+The animated full-window background was identified as the most obvious always-on
+performance offender because it continuously animates large blurred gradient
+layers across the whole viewport.
+
+I added a persisted Appearance preference for this:
+- setting name: backgroundMotion
+- default: enabled
+- storage: localStorage through the existing preferences system
+- document dataset: data-background-motion="on" or "off"
+
+The Settings window now has an "Animated background" checkbox under Appearance.
+Turning it off keeps the themed static background but stops the expensive moving
+CSS layers.
+
+CSS changes for the disabled state:
+- infinite pseudo-element animations are removed
+- will-change is removed
+- transform movement is stopped
+- heavy filter/blur work is reduced
+- the background falls back to lighter static gradients
+
+The existing prefers-reduced-motion behavior remains a separate safety net, so
+OS-level reduced motion still stops animation regardless of the app preference.
+
+Main areas involved:
+- Application/src/renderer/preferences.js
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/styles.css
+
+
+2. Calendar UI density and layout fixes
+---------------------------------------
+
+Month view event density:
+- Days with one event still use the richer event card presentation.
+- Days with two or more events now render compact title-only rows.
+- Click, double-click, keyboard activation, focus styling, and event color are
+  preserved.
+- The event list is clipped inside each tile so the month grid stays stable.
+
+Year view small-screen behavior:
+- Mini month cards now shrink internal day numbers and gaps using responsive
+  constraints.
+- Month cards clip their internal grids so day numbers do not spill outside the
+  card on small monitors.
+- The year grid remains scrollable, but each card is more resilient internally.
+
+Selected-day detail card:
+- The large always-visible selected-day detail card in Day and Week views was
+  replaced with a compact collapsed-by-default toggle bar.
+- The new shared component is:
+  Application/src/renderer/components/Views/SelectedDayDetails.jsx
+- The bar shows the selected date, event count, and first/next event summary.
+- Expanding it shows bordered rows with time, title, context, and event type.
+- Existing click, double-click, and keyboard event-opening behavior is preserved.
+
+Header Add event button:
+- The calendar header-level "Add event" button was removed.
+- Creating events from calendar slots/dates remains intact.
+- The "Today's schedule" action remains visible.
+
+Main areas involved:
+- Application/src/renderer/components/Views/MonthView.jsx
+- Application/src/renderer/components/Views/YearView.jsx
+- Application/src/renderer/components/Views/DayView.jsx
+- Application/src/renderer/components/Views/WeekView.jsx
+- Application/src/renderer/components/Views/CalendarViewHeader.jsx
+- Application/src/renderer/styles.css
+
+
+3. First setup scrollability and setup cleanup
+----------------------------------------------
+
+The first-launch setup screen was changed from a centered card that could
+overflow to a real viewport-height scroll container.
+
+Improvements:
+- onboarding now owns a scrollable viewport
+- scrollbar behavior is visible and keyboard-scrollable
+- lower form content and actions remain reachable on small screens
+- country, timezone, name, email, and account setup content remains intact
+
+The optional email message was changed to be clearer:
+"If you do not have a real email, leave this blank. It is optional."
+
+Main area involved:
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/styles.css
+
+
+4. Event title limits and input sanitization
+--------------------------------------------
+
+Event titles created or edited in this app are now capped at 20 characters.
+Imported and synced external calendar titles are not forcibly capped, so outside
+calendar data is not silently damaged.
+
+Renderer changes:
+- quick title input has maxLength=20
+- full editor title input has maxLength=20
+- typing strips control characters and angle brackets from titles
+- save payloads trim, normalize, and cap title text
+
+Backend/store changes:
+- shared constant: EVENT_TITLE_MAX_LENGTH = 20
+- createEvent and updateEvent apply the 20-character cap for user-created and
+  user-edited events
+- import/sync paths continue to use the existing wider title handling
+
+Text sanitization was strengthened for user-controlled string fields:
+- strips control characters
+- strips angle brackets from text fields that might otherwise look like markup
+- trims and normalizes where appropriate
+- keeps React's normal escaped rendering path
+- preserves existing URL protocol validation and color validation
+
+Main areas involved:
+- Application/src/security/validation.js
+- Application/src/data/calendar-store.js
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/renderer.jsx
+- Application/src/renderer/components/EventComposerFields.jsx
+
+
+5. Practical email validation
+-----------------------------
+
+The old permissive email check was replaced with a more practical validator.
+
+New behavior:
+- optional setup/settings email may be blank
+- fake-looking values such as t@t are rejected
+- domains must contain a dot
+- final domain label must be at least two characters
+- normal emails such as person@example.com and person.name+tag@example.co.uk pass
+
+This validation is used in:
+- setup email validation
+- settings reminder recipient validation
+- renderer notification recipient normalization
+- backend notification recipient sanitization
+- backend invite recipient validation
+
+Main areas involved:
+- Application/src/security/validation.js
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+
+
+6. About section cleanup
+------------------------
+
+The About and Hero surfaces were simplified so normal users no longer see
+technical/debug clutter.
+
+Removed from normal About/Hero:
+- Hosted cursor
+- device ID
+- database path
+- platform pill
+- audit counts
+- trusted device count
+- provider counts
+- raw change/device diagnostics
+- separate Device information card
+
+Kept as user-facing status:
+- active events
+- vault/protection state
+- hosted sync status
+- keyboard shortcuts
+- Settings guidance
+
+Main areas involved:
+- Application/src/renderer/components/AboutDrawer.jsx
+- Application/src/renderer/components/HeroCard.jsx
+
+
+7. Developer/debug mode and structured error codes
+--------------------------------------------------
+
+A hidden developer mode was added and is off by default.
+
+How it works:
+- shortcut: Ctrl+Alt+D
+- not triggered while typing in normal editable fields
+- persisted through localStorage
+- document dataset: data-developer-mode="on" or "off"
+- visible Debug button only appears when developer mode is enabled
+
+Debug actions added:
+- open first setup again as a debug overlay
+- open Settings
+- open About
+- open the full event editor
+- open Upcoming
+- refresh snapshot
+- copy a redacted debug snapshot
+
+Debug snapshot includes:
+- window mode
+- setup-complete flag
+- selected view/date
+- event counts
+- tag counts
+- connected account count
+- hosted sync status
+- holiday preload status
+- OAuth busy/polling state
+- external calendar load states
+- theme/background-motion state
+- latest recorded app error
+
+Debug snapshot redaction:
+- password-like fields are redacted
+- token-like fields are redacted
+- secret/private/key/credential-like fields are redacted
+- raw hosted passwords and private keys are not exposed
+
+Structured error helper:
+- new shared helper file:
+  Application/src/shared/app-errors.js
+- supports code, message, and cause
+- formats messages like [CAL-553] SQLite insert failed.
+- parses coded messages back into code/message parts
+
+IPC error wrapping:
+- IPC handlers now go through a wrapper
+- explicit codes are preserved
+- uncoded errors receive channel-based fallback codes
+
+Codes used:
+- CAL-553: create/insert event failure
+- CAL-554: update event failure
+- CAL-555: delete event failure
+- CAL-560: import/export failure
+- CAL-570: external calendar import/refresh failure
+- AUTH-401: OAuth/account failure
+- HOST-502: hosted backend failure
+- SEC-601: security/vault/trusted-device/reauth failure
+- VAL-422: validation failure
+- APP-500: uncategorized unexpected failure
+
+Main areas involved:
+- Application/src/shared/app-errors.js
+- Application/src/ipc/calendar-ipc.js
+- Application/src/renderer/debug-tools.js
+- Application/src/renderer/components/DebugPanel.jsx
+- Application/src/renderer/renderer.jsx
+- Application/src/renderer/preferences.js
+- Application/src/renderer/components/Header.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/styles.css
+
+
+8. Recurrence update
+--------------------
+
+The repeat schedule options now include Yearly.
+
+Changes:
+- renderer dropdown now includes Yearly
+- backend validation accepts repeat: "yearly"
+- create and update sanitization tests assert yearly recurrence survives
+
+Main areas involved:
+- Application/src/renderer/components/EventComposerFields.jsx
+- Application/src/security/validation.js
+- Application/test/run-security-tests.js
+
+
+9. Tests and verification
+-------------------------
+
+The security/regression test suite was expanded and run repeatedly.
+
+New/updated coverage includes:
+- title cap at 20 characters for renderer payloads
+- backend create/update title cap for user-created/user-edited events
+- imported external titles remain uncapped
+- script-like input is stored as inert text
+- practical email validation accepts normal addresses
+- fake-looking emails such as t@t fail
+- app error helper formatting and parsing
+- IPC wrapper preserving/assigning error codes
+- developer mode defaulting off and persisting when toggled
+- debug snapshot redaction of token/password/private-key-like fields
+- yearly repeat accepted on create/update sanitization
+
+Commands run successfully during this pass:
+- npm test
+- npm run package
+
+There were intermittent Electron Forge Windows EPERM issues during some package
+runs, specifically when Forge tried to rename:
+.webpack\renderer -> .webpack\x64\renderer
+
+That issue appeared to be a filesystem/lock/permission problem rather than a
+JavaScript compile failure. Later package runs completed successfully after
+Forge was allowed to run with elevated permissions.
+
+
+10. Notes about existing background processes
+---------------------------------------------
+
+The main always-on performance offender addressed in this pass was the animated
+full-window CSS background.
+
+Other background or periodic systems still exist, but were intentionally not
+changed in this pass:
+- reminder polling
+- OAuth polling after account connection starts
+- hosted sync actions
+- provider calendar operations
+- calendar rendering
+
+If CPU or RAM usage remains high after disabling the animated background, the
+next likely areas to profile are reminder polling and hosted/provider sync
+activity.
+
+
+11. Source state note
+---------------------
+
+This work pass builds on several related changes made in the same working tree.
+Some files appear in git status because earlier requested changes are also still
+unstaged. package-lock.json may appear touched after package runs even when its
+content hash matches the index; that appears to be Windows line-ending/stat
+bookkeeping from Forge/npm rather than a dependency change.

@@ -9,6 +9,7 @@ import {
   mergeCountryOptions,
 } from '../setup-options';
 import { updatePreference } from '../preferences';
+import { isValidEmailAddress, normalizeEmailAddress } from '../eventDraft';
 
 function ThemePreview({ label, themeClass, isActive, onClick, description }) {
   return (
@@ -74,6 +75,64 @@ function AppInfoCard({ snapshot, effectiveTheme, preferences }) {
   );
 }
 
+function DeveloperDiagnosticsCard({ debugSnapshot }) {
+  if (!debugSnapshot?.app?.developerMode) {
+    return null;
+  }
+
+  const app = debugSnapshot.app;
+  const ui = debugSnapshot.ui || {};
+  const data = debugSnapshot.data || {};
+  const integrations = debugSnapshot.integrations || {};
+  const lastAppError = debugSnapshot.lastAppError || null;
+
+  return (
+    <SettingsCard
+      eyebrow="Developer mode"
+      title="Developer diagnostics"
+      description="Hidden diagnostics for troubleshooting. Secrets and raw calendar content are not included."
+    >
+      <div className="settings-info-list">
+        <div className="settings-info-row">
+          <span>Window mode</span>
+          <strong>{app.windowMode || 'unknown'}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Setup complete</span>
+          <strong>{app.setupComplete ? 'yes' : 'no'}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Calendar view</span>
+          <strong>{ui.calendarView || 'none'}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Events</span>
+          <strong>{data.activeEvents || 0} active / {data.totalEvents || 0} total</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Accounts</span>
+          <strong>{integrations.connectedAccountCount || 0}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Hosted sync</span>
+          <strong>{integrations.hostedSyncStatus || 'disconnected'}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Holiday preload</span>
+          <strong>{integrations.holidayPreloadState?.status || 'idle'}</strong>
+        </div>
+        <div className="settings-info-row">
+          <span>Last error</span>
+          <strong>{lastAppError?.code || 'none'}</strong>
+        </div>
+      </div>
+      {lastAppError?.message ? (
+        <p className="settings-inline-warning mt-3">{lastAppError.message}</p>
+      ) : null}
+    </SettingsCard>
+  );
+}
+
 export default function SettingsWindow({
   snapshot,
   preferences,
@@ -105,9 +164,11 @@ export default function SettingsWindow({
   oauthBusyProvider = '',
   accountBusyId = '',
   oauthStatusMessage = '',
+  debugSnapshot = null,
 }) {
   const detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const detectedCountryCode = detectCountryCode();
+  const [notificationEmailMessage, setNotificationEmailMessage] = useState('');
   const [countries, setCountries] = useState(() => getDefaultCountryOptions(detectedCountryCode));
   const allTimeZones = useMemo(() => {
     if (typeof Intl.supportedValuesOf === 'function') {
@@ -197,6 +258,16 @@ export default function SettingsWindow({
               description={`Currently following ${effectiveTheme}`}
             />
           </div>
+          <label className="settings-toggle mt-5">
+            <input
+              type="checkbox"
+              checked={preferences.backgroundMotion !== false}
+              onChange={(event) =>
+                updatePreference(setPreferences, { backgroundMotion: event.target.checked })
+              }
+            />
+            <span>Animated background</span>
+          </label>
         </SettingsCard>
 
         <SettingsCard
@@ -222,13 +293,37 @@ export default function SettingsWindow({
                 className="app-input"
                 value={preferences.notificationEmail}
                 placeholder="Optional"
-                onChange={(event) =>
-                  updatePreference(setPreferences, { notificationEmail: event.target.value })
-                }
+                pattern="[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,63}"
+                onChange={(event) => {
+                  setNotificationEmailMessage('');
+                  updatePreference(setPreferences, { notificationEmail: event.target.value });
+                }}
+                onBlur={(event) => {
+                  const normalizedEmail = normalizeEmailAddress(event.target.value);
+                  if (!normalizedEmail) {
+                    setNotificationEmailMessage('');
+                    updatePreference(setPreferences, { notificationEmail: '' });
+                    return;
+                  }
+
+                  if (!isValidEmailAddress(normalizedEmail)) {
+                    setNotificationEmailMessage(
+                      'Enter a real email address, or leave this blank. It is optional.'
+                    );
+                    updatePreference(setPreferences, { notificationEmail: '' });
+                    return;
+                  }
+
+                  setNotificationEmailMessage('');
+                  updatePreference(setPreferences, { notificationEmail: normalizedEmail });
+                }}
               />
               <small className="settings-field-copy">
-                Optional. One extra recipient for reminders, not a sending account.
+                If you do not have a real email, leave this blank. It is optional.
               </small>
+              {notificationEmailMessage ? (
+                <small className="settings-inline-warning">{notificationEmailMessage}</small>
+              ) : null}
             </label>
             <label className="settings-field">
               <span>Country</span>
@@ -441,6 +536,8 @@ export default function SettingsWindow({
           effectiveTheme={effectiveTheme}
           preferences={preferences}
         />
+
+        <DeveloperDiagnosticsCard debugSnapshot={debugSnapshot} />
       </div>
     </main>
   );

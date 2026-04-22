@@ -9,7 +9,20 @@ const { transformFileSync } = require('@babel/core');
 
 const { CalendarStore } = require('../src/data/calendar-store');
 const { ReminderService, resolveReminderScope } = require('../src/reminder-service');
-const { sanitizeEventCreateInput, sanitizeEventUpdateInput } = require('../src/security/validation');
+const {
+  EVENT_TITLE_MAX_LENGTH,
+  isValidEmailAddress,
+  sanitizeEventCreateInput,
+  sanitizeEventUpdateInput,
+} = require('../src/security/validation');
+const {
+  ERROR_CODES,
+  createAppError,
+  formatCodedMessage,
+  normalizeAppError,
+  parseCodedErrorMessage,
+} = require('../src/shared/app-errors');
+const { wrapIpcHandler } = require('../src/ipc/calendar-ipc');
 
 function loadTranspiledModule(modulePath) {
   const transformed = transformFileSync(modulePath, {
@@ -47,6 +60,12 @@ const composerRouting = loadTranspiledModule(
 );
 const keyboardNavigation = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'keyboardNavigation.js')
+);
+const preferencesModule = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'preferences.js')
+);
+const debugTools = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'debug-tools.js')
 );
 const calendarInterchange = require('../src/data/calendar-interchange');
 
@@ -127,6 +146,127 @@ function createFakeTimer() {
       return tasks.size;
     },
   };
+}
+
+function createMockLocalStorage(initialValues = {}) {
+  const values = new Map(Object.entries(initialValues));
+  return {
+    getItem(key) {
+      return values.has(key) ? values.get(key) : null;
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+  };
+}
+
+async function testAppErrorHelpersAndIpcWrapper() {
+  assert.equal(formatCodedMessage(ERROR_CODES.calendarCreate, 'Failed to insert event.'), '[CAL-553] Failed to insert event.');
+  assert.deepEqual(parseCodedErrorMessage('[VAL-422] Event title is required.'), {
+    code: 'VAL-422',
+    message: 'Event title is required.',
+    formattedMessage: '[VAL-422] Event title is required.',
+  });
+
+  const explicitError = createAppError({
+    code: ERROR_CODES.hosted,
+    message: 'Hosted sync failed.',
+  });
+  assert.equal(normalizeAppError(explicitError, ERROR_CODES.unexpected), explicitError);
+
+  const validationError = normalizeAppError(new Error('Event title is required.'), ERROR_CODES.calendarCreate);
+  assert.equal(validationError.code, ERROR_CODES.validation);
+  assert.equal(validationError.message, '[VAL-422] Event title is required.');
+
+  const createFailure = await wrapIpcHandler('calendar:createEvent', () => {
+    throw new Error('SQLite insert failed.');
+  })().catch((error) => error);
+  assert.equal(createFailure.code, ERROR_CODES.calendarCreate);
+  assert.equal(createFailure.message, '[CAL-553] SQLite insert failed.');
+
+  const updateFailure = await wrapIpcHandler('calendar:updateEvent', () => {
+    throw new Error('database is locked');
+  })().catch((error) => error);
+  assert.equal(updateFailure.code, ERROR_CODES.calendarUpdate);
+
+  const deleteFailure = await wrapIpcHandler('calendar:deleteEvent', () => {
+    throw new Error('database is locked');
+  })().catch((error) => error);
+  assert.equal(deleteFailure.code, ERROR_CODES.calendarDelete);
+}
+
+function testDeveloperModePreferenceAndDebugRedaction() {
+  const previousWindow = global.window;
+  global.window = {
+    localStorage: createMockLocalStorage(),
+    matchMedia: () => ({
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+  };
+
+  try {
+    const preferences = preferencesModule.getStoredPreferences();
+    assert.equal(preferences.developerMode, false);
+    preferencesModule.persistPreferences({
+      ...preferences,
+      developerMode: true,
+    });
+    assert.equal(global.window.localStorage.getItem(preferencesModule.STORAGE_KEYS.developerMode), 'true');
+  } finally {
+    global.window = previousWindow;
+  }
+
+  const debugSnapshot = debugTools.buildDebugSnapshot({
+    windowMode: 'main',
+    isSetupComplete: true,
+    preferences: {
+      developerMode: true,
+      themeMode: 'dark',
+      backgroundMotion: false,
+    },
+    effectiveTheme: 'dark',
+    calendarView: 'month',
+    selectedDate: new Date('2026-04-22T12:00:00.000Z'),
+    snapshot: {
+      events: [{ id: 'event-1', title: 'Visible title', password: 'bad' }],
+      tags: [{ label: 'Work' }],
+      externalCalendarSources: [],
+      externalEventLinks: [],
+      stats: { activeEventCount: 1, changeCount: 2 },
+      security: {
+        hosted: {
+          connectionStatus: 'connected',
+          refreshToken: 'secret-token',
+        },
+      },
+    },
+    visibleEvents: [{ id: 'event-1' }],
+    availableTags: [{ label: 'Work' }],
+    connectedAccounts: [{ email: 'person@example.com', accessToken: 'secret-token' }],
+    hostedBusyAction: '',
+    holidayPreloadState: { status: 'idle' },
+    oauthBusyProvider: '',
+    oauthPollingActive: false,
+    externalCalendarsByAccount: {
+      account_1: {
+        status: 'ready',
+        items: [{ id: 'calendar-1', privateKey: 'secret-key' }],
+      },
+    },
+    composerState: { variant: null },
+    isUpcomingOpen: false,
+    isAboutOpen: false,
+    lastAppError: { code: 'APP-500', message: 'Test error' },
+  });
+  const serialized = JSON.stringify(debugSnapshot);
+  assert.equal(serialized.includes('secret-token'), false);
+  assert.equal(serialized.includes('secret-key'), false);
+  assert.equal(debugSnapshot.app.developerMode, true);
 }
 
 function testClickIntentHelpers() {
@@ -575,6 +715,7 @@ function testReminderHelpersAndValidation() {
   const sanitizedCreate = sanitizeEventCreateInput({
     title: 'Reminder create',
     type: 'meeting',
+    repeat: 'yearly',
     notifications: [
       createNotificationInput('sanitized_primary', {
         reminderMinutesBeforeStart: 30,
@@ -591,6 +732,7 @@ function testReminderHelpersAndValidation() {
     endsAt: '2026-04-16T10:00:00.000Z',
     color: '#4f9d69',
   });
+  assert.equal(sanitizedCreate.repeat, 'yearly');
   assert.equal(sanitizedCreate.reminderMinutesBeforeStart, 30);
   assert.equal(sanitizedCreate.desktopNotificationEnabled, true);
   assert.equal(sanitizedCreate.emailNotificationEnabled, true);
@@ -605,6 +747,7 @@ function testReminderHelpersAndValidation() {
   });
 
   const sanitizedUpdate = sanitizeEventUpdateInput({
+    repeat: 'yearly',
     notifications: [
       createNotificationInput('update_primary', {
         reminderMinutesBeforeStart: 15,
@@ -618,11 +761,32 @@ function testReminderHelpersAndValidation() {
       }),
     ],
   });
+  assert.equal(sanitizedUpdate.repeat, 'yearly');
   assert.equal(sanitizedUpdate.reminderMinutesBeforeStart, 15);
   assert.equal(sanitizedUpdate.desktopNotificationEnabled, false);
   assert.equal(sanitizedUpdate.emailNotificationEnabled, true);
   assert.deepEqual(sanitizedUpdate.emailNotificationRecipients, ['ops@example.com']);
   assert.equal(sanitizedUpdate.notifications.length, 2);
+
+  const cappedPayload = eventDraft.buildEventPayloadFromDraft(
+    {
+      ...hydratedDraft,
+      title: '12345678901234567890 extra',
+      description: '<script>alert(1)</script>\nKeep this',
+      location: '<img src=x>',
+      groupName: '<group>',
+    },
+    60
+  );
+  assert.equal(cappedPayload.title, '12345678901234567890');
+  assert.equal(cappedPayload.title.length, eventDraft.EVENT_TITLE_MAX_LENGTH);
+  assert.equal(cappedPayload.description.includes('<script>'), false);
+  assert.equal(cappedPayload.location.includes('<'), false);
+  assert.equal(cappedPayload.groupName.includes('>'), false);
+
+  assert.equal(isValidEmailAddress('person@example.com'), true);
+  assert.equal(isValidEmailAddress('person.name+tag@example.co.uk'), true);
+  assert.equal(isValidEmailAddress('t@t'), false);
 
   assert.throws(
     () =>
@@ -651,7 +815,7 @@ function testReminderHelpersAndValidation() {
           createNotificationInput('bad_recipient', {
             reminderMinutesBeforeStart: 15,
             emailNotificationEnabled: true,
-            emailNotificationRecipients: ['bad-recipient'],
+            emailNotificationRecipients: ['t@t'],
           }),
         ],
         startsAt: '2026-04-16T09:00:00.000Z',
@@ -685,7 +849,7 @@ function testEncryptedAtRest() {
   const fixture = createStoreFixture('calendar-store-test-');
 
   try {
-    const title = 'ULTRA_SECRET_TITLE_439A';
+    const title = 'ULTRA_SECRET_439A';
     const description = 'ULTRA_SECRET_DESCRIPTION_93BD';
     fixture.store.createEvent({
       title,
@@ -816,6 +980,28 @@ function testEventRoundTripFields() {
   try {
     fixture.store.prepareHostedBootstrap();
 
+    const cappedCreateSnapshot = fixture.store.createEvent({
+      title: '12345678901234567890 extra title text',
+      type: 'meeting',
+      startsAt: '2026-04-15T09:00:00.000Z',
+      endsAt: '2026-04-15T10:00:00.000Z',
+      color: '#4f9d69',
+    });
+    const cappedCreatedEvent = cappedCreateSnapshot.events.find(
+      (event) => event.startsAt === '2026-04-15T09:00:00.000Z'
+    );
+    assert.equal(cappedCreatedEvent.title, '12345678901234567890');
+    assert.equal(cappedCreatedEvent.title.length, EVENT_TITLE_MAX_LENGTH);
+
+    const cappedUpdateSnapshot = fixture.store.updateEvent({
+      id: cappedCreatedEvent.id,
+      title: 'abcdefghijklmnopqrst too long',
+    });
+    assert.equal(
+      cappedUpdateSnapshot.events.find((event) => event.id === cappedCreatedEvent.id).title,
+      'abcdefghijklmnopqrst'
+    );
+
     const typeInputs = [
       {
         title: 'Meeting round-trip',
@@ -877,7 +1063,7 @@ function testEventRoundTripFields() {
     }
 
     let snapshot = fixture.store.snapshot();
-    assert.equal(snapshot.events.length, 3);
+    assert.equal(snapshot.events.length, 4);
     assert.equal(snapshot.events.find((event) => event.type === 'meeting')?.syncPolicy, 'internal_only');
     assert.equal(snapshot.events.find((event) => event.type === 'focus')?.visibility, 'busy_only');
     assert.deepEqual(snapshot.events.find((event) => event.type === 'personal')?.people, ['Person 3', 'Guest 3']);
@@ -1185,7 +1371,7 @@ async function testReminderServiceDispatch() {
   try {
     fixture.store.prepareHostedBootstrap();
     fixture.store.createEvent({
-      title: 'Reminder service event',
+      title: 'Reminder service',
       type: 'meeting',
       notifications: [
         createNotificationInput('service_primary', {
@@ -1247,7 +1433,7 @@ async function testReminderServiceDispatch() {
     await reminderService.pollDueReminders();
 
     assert.equal(shownNotifications.length, 2);
-    assert.equal(shownNotifications[0].title, 'Reminder service event');
+    assert.equal(shownNotifications[0].title, 'Reminder service');
     assert.equal(sentEmails.length, 2);
     assert.equal(sentEmails[0].scope, 'work');
     assert.deepEqual(sentEmails[0].recipients, ['notify@example.com']);
@@ -1428,7 +1614,7 @@ async function testOutboundProviderInviteFlow() {
     });
     assert.equal(calls.some((call) => call.kind === 'update'), true);
     const updatedEvent = updatedSnapshot.events.find((event) => event.id === createdEvent.id);
-    assert.equal(updatedEvent.title, 'Provider invite updated');
+    assert.equal(updatedEvent.title, 'Provider invite upda');
     assert.equal(updatedEvent.externalProviderLinks[0].externalEventId, 'google_event_1');
 
     await fixture.store.deleteEvent(createdEvent.id);
@@ -1504,7 +1690,7 @@ async function testExternalCalendarImportRefreshAndDetach() {
         remoteEventId: 'remote_b',
         remoteVersion: 'v1',
         remoteDeleted: false,
-        title: 'Imported B',
+        title: 'Imported B title that stays long',
         description: 'Second imported event',
         location: 'Remote room B',
         people: ['b@example.com'],
@@ -1551,14 +1737,21 @@ async function testExternalCalendarImportRefreshAndDetach() {
     assert.equal(result.snapshot.events.length, 2);
     assert.equal(result.snapshot.externalCalendarSources.length, 1);
     assert.equal(result.snapshot.externalEventLinks.length, 2);
-    assert.equal(result.snapshot.events.find((event) => event.title === 'Imported B')?.isAllDay, true);
+    assert.equal(
+      result.snapshot.events.find((event) => event.title === 'Imported B title that stays long')
+        ?.isAllDay,
+      true
+    );
     assert.equal(
       result.snapshot.events.find((event) => event.title === 'Imported A')?.sourceTimeZone,
       'Europe/Helsinki'
     );
 
     const importedA = result.snapshot.events.find((event) => event.title === 'Imported A');
-    const importedB = result.snapshot.events.find((event) => event.title === 'Imported B');
+    const importedB = result.snapshot.events.find(
+      (event) => event.title === 'Imported B title that stays long'
+    );
+    assert.equal(importedB.title.length > EVENT_TITLE_MAX_LENGTH, true);
     fixture.store.updateEvent({
       id: importedA.id,
       title: 'Locally detached A',
@@ -1845,6 +2038,8 @@ function testOAuthClientConfigPersistence() {
 
 async function main() {
   const checks = [
+    ['app_error_helpers_and_ipc_wrapper', testAppErrorHelpersAndIpcWrapper],
+    ['developer_mode_preference_and_debug_redaction', testDeveloperModePreferenceAndDebugRedaction],
     ['click_intent_helpers', testClickIntentHelpers],
     ['composer_routing_helpers', testComposerRoutingHelpers],
     ['keyboard_navigation_helpers', testKeyboardNavigationHelpers],

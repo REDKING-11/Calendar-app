@@ -5,6 +5,7 @@ import {
   DURATION_PRESET_OPTIONS,
   EVENT_SCOPE_OPTIONS,
   EVENT_TYPE_OPTIONS,
+  EVENT_TITLE_MAX_LENGTH,
   INVITE_DELIVERY_MODE_OPTIONS,
   extractInviteeEmails,
   formatDateForInput,
@@ -18,6 +19,7 @@ const REPEAT_OPTIONS = [
   { id: 'daily', label: 'Daily' },
   { id: 'weekly', label: 'Weekly' },
   { id: 'monthly', label: 'Monthly' },
+  { id: 'yearly', label: 'Yearly' },
 ];
 const TIME_INPUT_SCROLL_STEP_MINUTES = 15;
 
@@ -836,6 +838,7 @@ function QuickComposerLayout({
           type="text"
           value={draftEvent.title}
           onChange={(event) => onFieldChange('title', event.target.value)}
+          maxLength={EVENT_TITLE_MAX_LENGTH}
           placeholder="Add a title"
           aria-label="Event title"
           className="app-input w-full rounded-xl px-4 py-3 event-composer-title-input event-composer-title-input--quick"
@@ -1136,6 +1139,7 @@ export default function EventComposerFields({
               type="text"
               value={draftEvent.title}
               onChange={(event) => onFieldChange('title', event.target.value)}
+              maxLength={EVENT_TITLE_MAX_LENGTH}
               placeholder="Pairing flow review"
               className="app-input w-full rounded-xl px-4 py-3 event-composer-title-input"
               autoFocus={titleAutoFocus}

@@ -7,6 +7,7 @@ import {
   hasCountryTimezoneMapping,
   mergeCountryOptions,
 } from '../setup-options';
+import { isValidEmailAddress, normalizeEmailAddress } from '../eventDraft';
 
 function getBackgroundStatusMessage(preloadState, activeCountryCode, activeCountryName) {
   if (!activeCountryCode || preloadState?.countryCode !== activeCountryCode) {
@@ -184,10 +185,19 @@ export default function Introduction({
     const nextCountryCode = formData.countryCode;
     const nextTimeZone = formData.timeZone;
     const nextName = formData.name.trim();
-    const nextNotificationEmail = formData.notificationEmail.trim();
+    const nextNotificationEmail = normalizeEmailAddress(formData.notificationEmail);
 
     setIsSaving(true);
     setStatusMessage('');
+    setFieldMessage('');
+
+    if (nextNotificationEmail && !isValidEmailAddress(nextNotificationEmail)) {
+      setIsSaving(false);
+      setStatusMessage(
+        'Enter a real email address, or leave the field blank. It is optional.'
+      );
+      return;
+    }
 
     try {
       if (typeof window !== 'undefined') {
@@ -230,7 +240,7 @@ export default function Introduction({
     <section
       className={
         isOnboarding
-          ? 'flex min-h-screen min-h-dvh w-full items-center justify-center p-6'
+          ? 'intro-onboarding-shell min-h-screen min-h-dvh w-full overflow-y-auto p-6'
           : 'flex w-full flex-col gap-3'
       }
     >
@@ -365,10 +375,11 @@ export default function Introduction({
               value={formData.notificationEmail}
               onChange={handleChange}
               placeholder="Optional"
+              pattern="[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,63}"
               className="app-input rounded-xl px-4 py-3"
             />
             <p className="text-sm leading-6 app-text-soft">
-              Optional. Add one extra email that can receive reminders. It is not used as a sender.
+              If you do not have a real email, leave this blank. It is optional.
             </p>
           </div>
 

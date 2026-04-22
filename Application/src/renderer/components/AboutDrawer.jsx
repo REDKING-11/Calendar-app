@@ -1,19 +1,6 @@
 import React from 'react';
 import HeroCard from './HeroCard';
 
-function formatDateTime(value) {
-  if (!value) {
-    return 'Not yet';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleString();
-}
-
 function StatCard({ label, value }) {
   return (
     <div className="settings-stat-card">
@@ -148,9 +135,6 @@ function KeyboardShortcutList() {
 export default function AboutDrawer({
   isOpen,
   onClose,
-  platform,
-  deviceId,
-  changeCount,
   activeEventCount,
   security,
 }) {
@@ -173,9 +157,6 @@ export default function AboutDrawer({
 
         <div className="settings-section-grid mt-6">
           <HeroCard
-            platform={platform}
-            deviceId={deviceId}
-            changeCount={changeCount}
             activeEventCount={activeEventCount}
             security={security}
           />
@@ -188,11 +169,7 @@ export default function AboutDrawer({
                 label="Vault mode"
                 value={security?.storage?.vault?.protectionMode || 'Unknown'}
               />
-              <StatCard
-                label="Trusted devices"
-                value={security?.devices?.trustedDeviceCount || 0}
-              />
-              <StatCard label="Audit events" value={security?.audit?.eventCount || 0} />
+              <StatCard label="Active events" value={activeEventCount || 0} />
               <StatCard
                 label="Hosted sync"
                 value={security?.hosted?.connectionStatus || 'disconnected'}
@@ -207,29 +184,6 @@ export default function AboutDrawer({
               The app ignores global shortcuts while you are typing in normal text fields.
             </p>
             <KeyboardShortcutList />
-          </section>
-
-          <section className="settings-card">
-            <p className="settings-section-eyebrow">Device information</p>
-            <h3 className="settings-card-title">Local device snapshot</h3>
-            <div className="settings-info-list">
-              <div className="settings-info-row">
-                <span>Platform</span>
-                <strong>{platform}</strong>
-              </div>
-              <div className="settings-info-row">
-                <span>Device ID</span>
-                <strong>{deviceId || 'Loading'}</strong>
-              </div>
-              <div className="settings-info-row">
-                <span>Database path</span>
-                <strong>{security?.storage?.databasePath || 'Unavailable'}</strong>
-              </div>
-              <div className="settings-info-row">
-                <span>Latest audit event</span>
-                <strong>{formatDateTime(security?.audit?.latestEvent?.createdAt)}</strong>
-              </div>
-            </div>
           </section>
 
           <section className="settings-card">

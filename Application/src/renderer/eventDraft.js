@@ -45,9 +45,50 @@ const REMINDER_UNIT_MULTIPLIERS = {
   hours: 60,
   days: 1440,
 };
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAX_REMINDER_MINUTES = 365 * 24 * 60;
+export const EVENT_TITLE_MAX_LENGTH = 20;
 export const DEFAULT_NOTIFICATION_REMINDER_MINUTES = 15;
+const PRACTICAL_EMAIL_PATTERN = /^[a-z0-9](?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{0,62}[a-z0-9])?@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+
+export function sanitizeInlineUserText(value = '', maxLength = 160) {
+  return String(value ?? '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+export function sanitizeMultilineUserText(value = '', maxLength = 5000) {
+  return String(value ?? '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .replace(/[<>]/g, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+export function normalizeEmailAddress(value = '') {
+  return sanitizeInlineUserText(value, 254).toLowerCase();
+}
+
+export function isValidEmailAddress(value = '') {
+  const normalized = normalizeEmailAddress(value);
+  if (!normalized || normalized.length > 254 || !PRACTICAL_EMAIL_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  const [localPart, domain] = normalized.split('@');
+  if (!localPart || !domain || localPart.length > 64 || domain.length > 253) {
+    return false;
+  }
+
+  return domain.split('.').every((label) => label.length > 0 && label.length <= 63);
+}
+
+export function normalizeOptionalEmailAddress(value = '') {
+  const normalized = normalizeEmailAddress(value);
+  return normalized && isValidEmailAddress(normalized) ? normalized : '';
+}
 
 const INVITE_DELIVERY_MODE_ALIASES = {
   local: 'local_only',
@@ -174,8 +215,8 @@ export function normalizeNotificationRecipients(value = []) {
   const seen = new Set();
 
   return rawValues.slice(0, 20).flatMap((item) => {
-    const normalized = String(item || '').trim().toLowerCase();
-    if (!normalized || !EMAIL_PATTERN.test(normalized) || seen.has(normalized)) {
+    const normalized = normalizeEmailAddress(item);
+    if (!normalized || !isValidEmailAddress(normalized) || seen.has(normalized)) {
       return [];
     }
 
@@ -210,8 +251,8 @@ export function extractInviteeEmails(value = []) {
   const seen = new Set();
 
   return rawValues.flatMap((item) => {
-    const normalized = String(item || '').trim().toLowerCase();
-    if (!normalized || !EMAIL_PATTERN.test(normalized) || seen.has(normalized)) {
+    const normalized = normalizeEmailAddress(item);
+    if (!normalized || !isValidEmailAddress(normalized) || seen.has(normalized)) {
       return [];
     }
 
@@ -332,7 +373,7 @@ export function formatTimeForInput(date) {
 function parsePeopleInput(value = '') {
   return String(value || '')
     .split(/[\n,;]+/g)
-    .map((item) => item.trim())
+    .map((item) => sanitizeInlineUserText(item, 120))
     .filter(Boolean);
 }
 
@@ -533,15 +574,15 @@ export function buildEventPayloadFromDraft(draftEvent, fallbackDuration = 60) {
   const primaryNotification = configuredNotifications[0] || null;
 
   return {
-    title: draftEvent.title.trim(),
-    description: draftEvent.description.trim(),
-    location: draftEvent.location.trim(),
+    title: sanitizeInlineUserText(draftEvent.title, EVENT_TITLE_MAX_LENGTH),
+    description: sanitizeMultilineUserText(draftEvent.description, 5000),
+    location: sanitizeInlineUserText(draftEvent.location, 160),
     people: parsePeopleInput(draftEvent.peopleInput),
     type: normalizeEventType(draftEvent.type),
     completed: Boolean(draftEvent.completed),
     repeat: draftEvent.repeat || 'none',
     hasDeadline: Boolean(draftEvent.hasDeadline),
-    groupName: draftEvent.groupName?.trim() || '',
+    groupName: sanitizeInlineUserText(draftEvent.groupName, 120),
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
     inviteRecipients: extractInviteeEmails(draftEvent.inviteRecipientsInput),
@@ -554,13 +595,13 @@ export function buildEventPayloadFromDraft(draftEvent, fallbackDuration = 60) {
     tags: draftEvent.tags || [],
     syncPolicy: scopeToSyncPolicy(draftEvent.scope),
     visibility: scopeToVisibility(draftEvent.scope),
-    inviteTargetAccountId: String(draftEvent.inviteTargetAccountId || '').trim(),
+    inviteTargetAccountId: sanitizeInlineUserText(draftEvent.inviteTargetAccountId, 120),
     inviteTargetProvider:
       normalizeInviteProvider(draftEvent.inviteTargetProvider) ||
       scopeToInviteProvider(draftEvent.scope),
-    inviteTargetCalendarId: String(draftEvent.inviteTargetCalendarId || '').trim(),
+    inviteTargetCalendarId: sanitizeInlineUserText(draftEvent.inviteTargetCalendarId, 240),
     inviteDeliveryMode: normalizeInviteDeliveryMode(draftEvent.inviteDeliveryMode),
-    lastInviteError: String(draftEvent.lastInviteError || '').trim(),
+    lastInviteError: sanitizeInlineUserText(draftEvent.lastInviteError, 500),
     externalProviderLinks: draftEvent.externalProviderLinks || [],
   };
 }

@@ -6,9 +6,11 @@ const EVENT_TYPE_ALIASES = {
   task: 'focus',
   appointment: 'personal',
 };
-const REPEAT_OPTIONS = new Set(['none', 'daily', 'weekly', 'monthly']);
+const REPEAT_OPTIONS = new Set(['none', 'daily', 'weekly', 'monthly', 'yearly']);
 const MAX_REMINDER_MINUTES = 365 * 24 * 60;
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const DEFAULT_TEXT_MAX_LENGTH = 160;
+const EVENT_TITLE_MAX_LENGTH = 20;
+const EMAIL_PATTERN = /^[a-z0-9](?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{0,62}[a-z0-9])?@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const SYNC_POLICIES = new Set([
   'internal_only',
   'google_sync',
@@ -30,9 +32,10 @@ const INVITE_PROVIDERS = new Set(['', 'google', 'microsoft']);
 const INVITE_DELIVERY_MODES = new Set(['local_only', 'provider_invite']);
 const IANA_TIME_ZONE_PATTERN = /^[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)+$/;
 
-function sanitizeInlineText(value, maxLength = 160) {
+function sanitizeInlineText(value, maxLength = DEFAULT_TEXT_MAX_LENGTH) {
   return String(value ?? '')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+    .replace(/[<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLength);
@@ -41,8 +44,27 @@ function sanitizeInlineText(value, maxLength = 160) {
 function sanitizeMultilineText(value, maxLength = 5000) {
   return String(value ?? '')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .replace(/[<>]/g, '')
     .trim()
     .slice(0, maxLength);
+}
+
+function normalizeEmailAddress(value) {
+  return sanitizeInlineText(value, 254).toLowerCase();
+}
+
+function isValidEmailAddress(value) {
+  const normalized = normalizeEmailAddress(value);
+  if (!normalized || normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  const [localPart, domain] = normalized.split('@');
+  if (!localPart || !domain || localPart.length > 64 || domain.length > 253) {
+    return false;
+  }
+
+  return domain.split('.').every((label) => label.length > 0 && label.length <= 63);
 }
 
 function sanitizeColor(value, fallback = '#4f9d69') {
@@ -213,12 +235,12 @@ function normalizeInviteRecipients(recipients = []) {
   const seen = new Set();
 
   return rawRecipients.slice(0, 50).flatMap((recipient) => {
-    const normalized = sanitizeInlineText(recipient, 160).toLowerCase();
+    const normalized = normalizeEmailAddress(recipient);
     if (!normalized) {
       return [];
     }
 
-    if (!EMAIL_PATTERN.test(normalized)) {
+    if (!isValidEmailAddress(normalized)) {
       throw new Error('Invite recipients must be valid email addresses.');
     }
 
@@ -272,12 +294,12 @@ function sanitizeNotificationRecipients(recipients = []) {
   const seen = new Set();
 
   return rawRecipients.slice(0, 20).flatMap((recipient) => {
-    const normalized = sanitizeInlineText(recipient, 160).toLowerCase();
+    const normalized = normalizeEmailAddress(recipient);
     if (!normalized) {
       return [];
     }
 
-    if (!EMAIL_PATTERN.test(normalized)) {
+    if (!isValidEmailAddress(normalized)) {
       throw new Error('Notification recipients must be valid email addresses.');
     }
 
@@ -344,8 +366,9 @@ function sanitizeNotifications(notifications = []) {
   });
 }
 
-function sanitizeEventCreateInput(input = {}) {
-  const title = sanitizeInlineText(input.title, 160);
+function sanitizeEventCreateInput(input = {}, options = {}) {
+  const titleMaxLength = options.titleMaxLength || DEFAULT_TEXT_MAX_LENGTH;
+  const title = sanitizeInlineText(input.title, titleMaxLength);
   if (!title) {
     throw new Error('Event title is required.');
   }
@@ -413,12 +436,13 @@ function sanitizeEventCreateInput(input = {}) {
   };
 }
 
-function sanitizeEventUpdateInput(input = {}) {
+function sanitizeEventUpdateInput(input = {}, options = {}) {
   const sanitized = {};
   let notificationsOverride = null;
+  const titleMaxLength = options.titleMaxLength || DEFAULT_TEXT_MAX_LENGTH;
 
   if (input.title !== undefined) {
-    const title = sanitizeInlineText(input.title, 160);
+    const title = sanitizeInlineText(input.title, titleMaxLength);
     if (!title) {
       throw new Error('Event title cannot be empty.');
     }
@@ -585,6 +609,8 @@ function validateImportPath(candidatePath, allowedBaseDir) {
 }
 
 module.exports = {
+  EVENT_TITLE_MAX_LENGTH,
+  isValidEmailAddress,
   normalizeEventType,
   sanitizeEventCreateInput,
   sanitizeEventUpdateInput,

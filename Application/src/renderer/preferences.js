@@ -9,6 +9,8 @@ export const STORAGE_KEYS = {
   hostedEmail: 'calendar-hosted-email',
   hostedDeviceName: 'calendar-hosted-device-name',
   themeMode: 'calendar-theme-mode',
+  backgroundMotion: 'calendar-background-motion',
+  developerMode: 'calendar-developer-mode',
   defaultView: 'calendar-settings-default-view',
   weekStartsOn: 'calendar-settings-week-start',
   timeFormat: 'calendar-settings-time-format',
@@ -24,6 +26,8 @@ export const STORAGE_KEYS = {
 
 export const DEFAULT_PREFERENCES = {
   themeMode: 'system',
+  backgroundMotion: true,
+  developerMode: false,
   name: '',
   countryCode: '',
   timeZone: '',
@@ -72,6 +76,12 @@ export function getStoredPreferences() {
 
   return {
     themeMode: defaultThemeMode,
+    backgroundMotion:
+      (storage?.getItem(STORAGE_KEYS.backgroundMotion) ??
+        String(DEFAULT_PREFERENCES.backgroundMotion)) === 'true',
+    developerMode:
+      (storage?.getItem(STORAGE_KEYS.developerMode) ??
+        String(DEFAULT_PREFERENCES.developerMode)) === 'true',
     name: storage?.getItem(STORAGE_KEYS.userName) || DEFAULT_PREFERENCES.name,
     countryCode: storage?.getItem(STORAGE_KEYS.userCountry) || DEFAULT_PREFERENCES.countryCode,
     timeZone: storage?.getItem(STORAGE_KEYS.userTimeZone) || detectedTimeZone,
@@ -121,6 +131,14 @@ export function persistPreferences(preferences) {
   }
 
   storage.setItem(STORAGE_KEYS.themeMode, preferences.themeMode);
+  storage.setItem(
+    STORAGE_KEYS.backgroundMotion,
+    String(preferences.backgroundMotion ?? DEFAULT_PREFERENCES.backgroundMotion)
+  );
+  storage.setItem(
+    STORAGE_KEYS.developerMode,
+    String(preferences.developerMode ?? DEFAULT_PREFERENCES.developerMode)
+  );
   storage.setItem(STORAGE_KEYS.userName, preferences.name || '');
   storage.setItem(STORAGE_KEYS.userCountry, preferences.countryCode || '');
   storage.setItem(STORAGE_KEYS.userTimeZone, preferences.timeZone || '');
@@ -217,7 +235,11 @@ export function useCalendarPreferences() {
     const resolvedTheme = preferences.themeMode === 'system' ? systemTheme : preferences.themeMode;
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.dataset.themeMode = preferences.themeMode;
-  }, [preferences.themeMode, systemTheme]);
+    document.documentElement.dataset.backgroundMotion =
+      preferences.backgroundMotion === false ? 'off' : 'on';
+    document.documentElement.dataset.developerMode =
+      preferences.developerMode === true ? 'on' : 'off';
+  }, [preferences.themeMode, preferences.backgroundMotion, preferences.developerMode, systemTheme]);
 
   const effectiveTheme = useMemo(
     () => (preferences.themeMode === 'system' ? systemTheme : preferences.themeMode),

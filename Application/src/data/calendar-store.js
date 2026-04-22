@@ -21,6 +21,7 @@ const { ReauthService } = require('../security/reauth-service');
 const { SecureVault } = require('../security/secure-vault');
 const { TrustedDeviceService } = require('../security/trusted-device-service');
 const {
+  EVENT_TITLE_MAX_LENGTH,
   normalizeEventType,
   sanitizeEventCreateInput,
   sanitizeEventUpdateInput,
@@ -3383,7 +3384,9 @@ class CalendarStore {
   }
 
   createEvent(input) {
-    const sanitized = sanitizeEventCreateInput(input);
+    const sanitized = sanitizeEventCreateInput(input, {
+      titleMaxLength: EVENT_TITLE_MAX_LENGTH,
+    });
 
     if (this.shouldSyncProviderInvite(sanitized)) {
       return this.createEventWithOutboundInvite(sanitized);
@@ -3425,7 +3428,9 @@ class CalendarStore {
       throw new Error('Event not found');
     }
 
-    const sanitizedPatch = sanitizeEventUpdateInput(input);
+    const sanitizedPatch = sanitizeEventUpdateInput(input, {
+      titleMaxLength: EVENT_TITLE_MAX_LENGTH,
+    });
     const nextEvent = {
       ...event,
       ...sanitizedPatch,

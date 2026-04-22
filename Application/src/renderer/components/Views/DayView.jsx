@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { isEventOnDate, isSameDay } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
+import SelectedDayDetails from './SelectedDayDetails';
 import TodayScheduleControl from './TodayScheduleControl';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
 import { createClickIntentRouter } from '../../clickIntent';
@@ -364,12 +365,6 @@ export default function DayView({
         onNext={goToNextDay}
         previousLabel="Previous day"
         nextLabel="Next day"
-        onAddEvent={(event) =>
-          onCreateEvent?.({
-            date: selectedDate,
-            anchorPoint: getAnchorFromElement(event.currentTarget),
-          })
-        }
         secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
       />
 
@@ -518,55 +513,23 @@ export default function DayView({
         </div>
       </div>
 
-      <div className="day-detail-card">
-        <div className="day-detail-header">
-          <div>
-            <p className="eyebrow">Selected day</p>
-            <h3>
-              {selectedDate.toLocaleDateString('en-US', {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </h3>
-          </div>
-        </div>
-
-        <div className="day-detail-list">
-          {dayEvents.length > 0 ? (
-            dayEvents.map((event) => (
-              <article key={event.id} className="day-detail-item">
-                <button
-                  type="button"
-                  className="day-detail-item-button"
-                  onClick={(clickEvent) =>
-                    eventClickRouterRef.current.handleSingle({
-                      event,
-                      anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
-                    })
-                  }
-                  onDoubleClick={() =>
-                    eventClickRouterRef.current.handleDouble({
-                      event,
-                    })
-                  }
-                  onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
-                >
-                  <p className="day-detail-time">{getEventTimeLabel(event, preferences)}</p>
-                  <div>
-                    <p className="day-detail-title">{event.title}</p>
-                    <p className="day-detail-subtle">{getEventContextLabel(event)}</p>
-                  </div>
-                </button>
-              </article>
-            ))
-          ) : (
-            <p className="day-detail-empty">
-              No events scheduled for this day yet. Click any time slot above to add one.
-            </p>
-          )}
-        </div>
-      </div>
+      <SelectedDayDetails
+        events={dayEvents}
+        preferences={preferences}
+        selectedDate={selectedDate}
+        onEventClick={(event, clickEvent) =>
+          eventClickRouterRef.current.handleSingle({
+            event,
+            anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+          })
+        }
+        onEventDoubleClick={(event) =>
+          eventClickRouterRef.current.handleDouble({
+            event,
+          })
+        }
+        onEventKeyDown={handleEventKeyboardOpen}
+      />
     </section>
   );
 }

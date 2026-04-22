@@ -4,8 +4,10 @@ export default function Header({
   regionRef,
   eventCount,
   onToggleUpcoming,
+  onOpenDebug,
   onOpenAbout,
   onOpenSettings,
+  developerMode = false,
   timeZone,
 }) {
   return (
@@ -35,6 +37,15 @@ export default function Header({
           >
             Settings
           </button>
+          {developerMode ? (
+            <button
+              type="button"
+              onClick={onOpenDebug}
+              className="app-button app-button--secondary"
+            >
+              Debug
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onOpenAbout}
