@@ -23,7 +23,8 @@ module.exports = {
       config: {
         language: 1033,
         manufacturer: 'REDKING_11',
-        programFilesFolderName: 'RedFolder',
+        nestedFolderName: 'RedFolder',
+        programFilesFolderName: 'Calendar',
         icon: windowsIconPath,
       },
     },
