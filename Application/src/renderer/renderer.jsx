@@ -11,10 +11,10 @@ import SettingsWindow from './components/SettingsWindow';
 import Sidebar from './components/Sidebar';
 import UpcomingPopover from './components/UpcomingPopover';
 import {
-  endOfMonth,
-  endOfWeek,
+  buildEventDateIndex,
+  getDateKey,
+  getMonthKey,
   isSameDay,
-  startOfMonth,
   startOfWeek,
 } from './components/calendar-helpers';
 import {
@@ -94,36 +94,30 @@ function getHolidaySeedYears() {
   return [currentYear, currentYear + 1];
 }
 
-function getVisibleEventsForView(events, calendarView, selectedDate, timeZone, weekStartsOn) {
+function getVisibleEventsForView(events, calendarView, selectedDate, timeZone, weekStartsOn, eventDateIndex = null) {
   if (!selectedDate) {
     return events;
   }
 
   if (calendarView === 'day') {
-    return events.filter((event) => isSameDay(new Date(event.startsAt), selectedDate));
+    return eventDateIndex?.byDay?.get(getDateKey(selectedDate)) || [];
   }
 
   if (calendarView === 'week') {
     const weekStart = startOfWeek(selectedDate, timeZone, weekStartsOn);
-    const weekEnd = endOfWeek(selectedDate, timeZone, weekStartsOn);
-    return events.filter((event) => {
-      const startsAt = new Date(event.startsAt);
-      return startsAt >= weekStart && startsAt < weekEnd;
-    });
+    return Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(weekStart);
+      day.setDate(weekStart.getDate() + index);
+      return eventDateIndex?.byDay?.get(getDateKey(day)) || [];
+    }).flat();
   }
 
   if (calendarView === 'month') {
-    const monthStart = startOfMonth(selectedDate);
-    const monthEnd = endOfMonth(selectedDate);
-    return events.filter((event) => {
-      const startsAt = new Date(event.startsAt);
-      return startsAt >= monthStart && startsAt < monthEnd;
-    });
+    return eventDateIndex?.byMonth?.get(getMonthKey(selectedDate)) || [];
   }
 
   if (calendarView === 'year') {
-    const year = selectedDate.getFullYear();
-    return events.filter((event) => new Date(event.startsAt).getFullYear() === year);
+    return eventDateIndex?.byYear?.get(String(selectedDate.getFullYear())) || [];
   }
 
   return events;
@@ -629,6 +623,20 @@ function App() {
     }
   };
 
+  const handleImportCalendarFile = async () => {
+    try {
+      const result = await window.calendarApp.importDataFromFilePicker();
+      if (result?.snapshot) {
+        snapshotRef.current = result.snapshot;
+        setSnapshot(result.snapshot);
+      }
+      return result;
+    } catch (error) {
+      rememberAppError(error, 'calendar-file-import');
+      throw error;
+    }
+  };
+
   const handleSkipSetup = () => {
     setIsSetupComplete(true);
     window.localStorage.setItem(STORAGE_KEYS.setupComplete, 'true');
@@ -640,8 +648,15 @@ function App() {
   );
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const events = useMemo(
-    () =>
-      allEvents.filter((event) => {
+    () => {
+      const now = new Date();
+      const weekStart = startOfWeek(now, preferences.timeZone, preferences.weekStartsOn);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 7);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+      return allEvents.filter((event) => {
         if (!preferences.showCompletedTasks && event.completed) {
           return false;
         }
@@ -659,13 +674,13 @@ function App() {
           );
         const matchesQuickFilter =
           quickFilter === 'all' ||
-          (quickFilter === 'today' && isSameDay(eventStart, new Date())) ||
+          (quickFilter === 'today' && isSameDay(eventStart, now)) ||
           (quickFilter === 'week' &&
-            eventStart >= startOfWeek(new Date(), preferences.timeZone, preferences.weekStartsOn) &&
-            eventStart < endOfWeek(new Date(), preferences.timeZone, preferences.weekStartsOn)) ||
+            eventStart >= weekStart &&
+            eventStart < weekEnd) ||
           (quickFilter === 'month' &&
-            eventStart >= startOfMonth(new Date()) &&
-            eventStart < endOfMonth(new Date()));
+            eventStart >= monthStart &&
+            eventStart < monthEnd);
         const matchesTags =
           activeTagFilters.length === 0 ||
           activeTagFilters.every((filterId) =>
@@ -673,7 +688,8 @@ function App() {
           );
 
         return matchesSearch && matchesQuickFilter && matchesTags;
-      }),
+      });
+    },
     [
       allEvents,
       normalizedSearchQuery,
@@ -684,6 +700,14 @@ function App() {
       preferences.weekStartsOn,
     ]
   );
+  const eventDateIndex = useMemo(() => buildEventDateIndex(events), [events]);
+  const todayEvents = useMemo(
+    () =>
+      [...(eventDateIndex.byDay.get(getDateKey(new Date())) || [])].sort(
+        (left, right) => new Date(left.startsAt) - new Date(right.startsAt)
+      ),
+    [eventDateIndex]
+  );
   const visibleEvents = useMemo(
     () =>
       getVisibleEventsForView(
@@ -691,9 +715,10 @@ function App() {
         calendarView,
         selectedDate,
         preferences.timeZone,
-        preferences.weekStartsOn
+        preferences.weekStartsOn,
+        eventDateIndex
       ),
-    [events, calendarView, selectedDate, preferences.timeZone, preferences.weekStartsOn]
+    [events, calendarView, selectedDate, preferences.timeZone, preferences.weekStartsOn, eventDateIndex]
   );
 
   const upcomingDays = useMemo(
@@ -731,30 +756,35 @@ function App() {
       ),
     [events, draftEvent, activeEvent?.id, preferences.defaultEventDuration]
   );
+  const shouldBuildDebugSnapshot =
+    preferences.developerMode === true && (isDebugPanelOpen || windowMode === 'settings');
   const debugSnapshot = useMemo(
     () =>
-      buildDebugSnapshot({
-        windowMode,
-        isSetupComplete,
-        preferences,
-        effectiveTheme,
-        calendarView,
-        selectedDate,
-        snapshot,
-        visibleEvents,
-        availableTags,
-        connectedAccounts,
-        hostedBusyAction,
-        holidayPreloadState,
-        oauthBusyProvider,
-        oauthPollingActive: Boolean(oauthPollingRef.current),
-        externalCalendarsByAccount,
-        composerState,
-        isUpcomingOpen,
-        isAboutOpen,
-        lastAppError,
-      }),
+      shouldBuildDebugSnapshot
+        ? buildDebugSnapshot({
+            windowMode,
+            isSetupComplete,
+            preferences,
+            effectiveTheme,
+            calendarView,
+            selectedDate,
+            snapshot,
+            visibleEvents,
+            availableTags,
+            connectedAccounts,
+            hostedBusyAction,
+            holidayPreloadState,
+            oauthBusyProvider,
+            oauthPollingActive: Boolean(oauthPollingRef.current),
+            externalCalendarsByAccount,
+            composerState,
+            isUpcomingOpen,
+            isAboutOpen,
+            lastAppError,
+          })
+        : null,
     [
+      shouldBuildDebugSnapshot,
       windowMode,
       isSetupComplete,
       preferences,
@@ -1654,6 +1684,7 @@ function App() {
           holidayPreloadState={holidayPreloadState}
           onCountryChange={prepareHolidayPreload}
           onImportHolidays={importHolidayPreferences}
+          onImportCalendarFile={handleImportCalendarFile}
           hosted={snapshot?.security?.hosted}
           hostedUrl={hostedUrl}
           onHostedUrlChange={setHostedUrl}
@@ -1756,6 +1787,7 @@ function App() {
           regionRef={sidebarRegionRef}
           availableTags={availableTags}
           events={events}
+          eventDateIndex={eventDateIndex}
           visibleEvents={visibleEvents}
           preferences={preferences}
           timeZone={preferences.timeZone}
@@ -1808,6 +1840,8 @@ function App() {
               headerRef={calendarHeaderRegionRef}
               calendarView={calendarView}
               events={events}
+              eventDateIndex={eventDateIndex}
+              todayEvents={todayEvents}
               preferences={preferences}
               selectedDate={selectedDate}
               timeZone={preferences.timeZone}

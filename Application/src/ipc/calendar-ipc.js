@@ -11,7 +11,11 @@ function getFallbackErrorCode(channel) {
   if (channel === 'calendar:deleteEvent') {
     return ERROR_CODES.calendarDelete;
   }
-  if (channel === 'calendar:importData' || channel === 'calendar:exportData') {
+  if (
+    channel === 'calendar:importData' ||
+    channel === 'calendar:importDataFromFilePicker' ||
+    channel === 'calendar:exportData'
+  ) {
     return ERROR_CODES.calendarImportExport;
   }
   if (
@@ -56,6 +60,7 @@ function registerCalendarHandlers(store) {
     'calendar:importExternalCalendar',
     'calendar:refreshExternalSource',
     'calendar:importData',
+    'calendar:importDataFromFilePicker',
     'calendar:exportData',
     'calendar:renameTag',
     'calendar:deleteTag',
@@ -106,6 +111,7 @@ function registerCalendarHandlers(store) {
     store.refreshExternalSource(input || {})
   );
   handle('calendar:importData', (_event, input) => store.importData(input || {}));
+  handle('calendar:importDataFromFilePicker', () => store.importDataFromFilePicker());
   handle('calendar:exportData', (_event, input) => store.exportData(input || {}));
   handle('calendar:renameTag', (_event, input) =>
     store.renameTagSystemWide(input?.tagId, input?.label)

@@ -11,6 +11,8 @@ import {
 export default function YearView({
   headerRef,
   events,
+  eventDateIndex,
+  todayEvents,
   preferences,
   timeZone,
   selectedDate,
@@ -21,8 +23,8 @@ export default function YearView({
 }) {
   const yearGridRef = useRef(null);
   const months = useMemo(
-    () => buildYearMonths(selectedDate, events, timeZone, preferences?.weekStartsOn),
-    [selectedDate, events, timeZone, preferences?.weekStartsOn]
+    () => buildYearMonths(selectedDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex),
+    [selectedDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex]
   );
   const weekdayLabels = useMemo(
     () => getWeekdayLabels(timeZone, preferences?.weekStartsOn),
@@ -64,7 +66,9 @@ export default function YearView({
         onNext={goToNextYear}
         previousLabel="Previous year"
         nextLabel="Next year"
-        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
+        secondaryAction={
+          <TodayScheduleControl events={events} todayEvents={todayEvents} preferences={preferences} />
+        }
       />
 
       <div ref={yearGridRef} className="year-grid flex-1 overflow-auto">

@@ -57,6 +57,8 @@ function focusWeekTarget(sourceElement, selector) {
 export default function WeekView({
   headerRef,
   events,
+  eventDateIndex,
+  todayEvents,
   preferences,
   timeZone,
   selectedDate,
@@ -71,8 +73,8 @@ export default function WeekView({
   const slotClickRouterRef = useRef(null);
   const eventClickRouterRef = useRef(null);
   const weekDays = useMemo(
-    () => buildWeekDays(selectedDate, events, timeZone, preferences?.weekStartsOn),
-    [selectedDate, events, timeZone, preferences?.weekStartsOn]
+    () => buildWeekDays(selectedDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex),
+    [selectedDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex]
   );
 
   const selectedDay = weekDays.find((day) => day.isSelected) || weekDays[0];
@@ -178,7 +180,9 @@ export default function WeekView({
         onNext={goToNextWeek}
         previousLabel="Previous week"
         nextLabel="Next week"
-        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
+        secondaryAction={
+          <TodayScheduleControl events={events} todayEvents={todayEvents} preferences={preferences} />
+        }
       />
 
       <div className="week-timeline min-h-0 flex-1" data-calendar-grid="week">

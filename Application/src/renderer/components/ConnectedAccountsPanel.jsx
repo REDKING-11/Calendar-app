@@ -27,6 +27,18 @@ const PROVIDER_ORDER = ['google', 'microsoft'];
 const ACCOUNT_BADGE_CLASS =
   'inline-flex min-h-6 items-center rounded-full border border-[var(--border-color)] bg-[var(--accent-soft)] px-2 py-[3px] text-[0.72rem] font-extrabold text-[var(--text-primary)]';
 const ACCOUNT_BADGE_MUTED_CLASS = 'bg-[var(--surface-secondary)] text-[var(--text-muted)]';
+const EXTERNAL_LINKS = {
+  googleCloudConsole: 'https://console.cloud.google.com/',
+  googleAuthClients: 'https://console.cloud.google.com/auth/clients',
+  googleApiLibrary: 'https://console.cloud.google.com/apis/library',
+  googleOAuthHelp: 'https://support.google.com/cloud/answer/6158849?hl=en',
+  azureAccount:
+    'https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account?icid=get-started-portal',
+  azurePortalApps: 'https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
+  entraApps: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
+  microsoftRedirectHelp: 'https://learn.microsoft.com/entra/identity-platform/how-to-add-redirect-uri',
+  microsoftPkceHelp: 'https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow',
+};
 
 function getProviderLabel(providerId) {
   if (providerId === 'google') {
@@ -138,21 +150,51 @@ export default function ConnectedAccountsPanel({
     }));
   };
 
-  const handleSaveSetup = async () => {
+  const saveSetupDraft = async ({ successMessage = 'Connection setup saved.' } = {}) => {
     if (!onSaveOAuthClientConfig) {
       setSetupMessage('Connection setup cannot be saved from this window yet.');
-      return;
+      return false;
     }
 
     setIsSavingSetup(true);
     setSetupMessage('');
     try {
       await onSaveOAuthClientConfig(clientConfigDraft);
-      setSetupMessage('Connection setup saved. You can connect accounts now.');
+      if (successMessage) {
+        setSetupMessage(successMessage);
+      }
+      return true;
     } catch (error) {
       setSetupMessage(error?.message || 'Connection setup could not be saved.');
+      return false;
     } finally {
       setIsSavingSetup(false);
+    }
+  };
+
+  const handleSaveSetup = async () => {
+    await saveSetupDraft({
+      successMessage: 'Connection setup saved. You can connect accounts now.',
+    });
+  };
+
+  const handleConnectProvider = async (providerId) => {
+    const label = getProviderLabel(providerId);
+    const saved = await saveSetupDraft({
+      successMessage: `Connection setup saved. Opening ${label} sign-in...`,
+    });
+    if (!saved) {
+      return;
+    }
+
+    onConnectProvider?.(providerId);
+  };
+
+  const handleOpenExternalLink = async (url) => {
+    try {
+      await window.calendarApp?.openExternalLink?.(url);
+    } catch (error) {
+      setSetupMessage(error?.message || 'That help link could not be opened.');
     }
   };
 
@@ -171,9 +213,17 @@ export default function ConnectedAccountsPanel({
             Google and Outlook
           </h3>
           <p className="settings-card-copy">
-            Connect multiple accounts for imports, reminders, and real calendar invites.
+            Connect accounts for online provider features. For a normal .ics or .json file, use
+            Calendar file import in Settings instead.
           </p>
         </div>
+      </div>
+
+      <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
+        <strong className="text-[var(--text-primary)]">What connecting means:</strong> provider
+        permissions unlock capabilities. Calendar App still waits for your choices: it does not
+        import every remote calendar automatically, and it only writes provider invite events when
+        you choose an account and calendar while creating an event.
       </div>
 
       <div className="flex flex-wrap gap-2.5">
@@ -184,15 +234,19 @@ export default function ConnectedAccountsPanel({
               key={provider.id}
               type="button"
               className="app-button app-button--secondary"
-              disabled={oauthBusyProvider === provider.id}
-              onClick={() => onConnectProvider?.(provider.id)}
+              disabled={oauthBusyProvider === provider.id || isSavingSetup}
+              onClick={() => handleConnectProvider(provider.id)}
               title={
                 provider.configured
                   ? `Connect ${label}`
-                  : `Add and save a ${label} OAuth client ID first`
+                  : `Add a ${label} OAuth client ID, then Connect will save setup automatically`
               }
             >
-              {oauthBusyProvider === provider.id ? `Connecting ${label}...` : `Connect ${label}`}
+              {oauthBusyProvider === provider.id
+                ? `Connecting ${label}...`
+                : isSavingSetup
+                  ? 'Saving setup...'
+                  : `Connect ${label}`}
             </button>
           );
         })}
@@ -203,8 +257,10 @@ export default function ConnectedAccountsPanel({
           <div>
             <p className="settings-section-eyebrow">OAuth setup</p>
             <p className="notification-helper-copy">
-              Add public desktop OAuth client IDs once, then the connect buttons open the browser
-              sign-in. Redirect URIs must match your Google Cloud / Azure app settings.
+              Add public desktop OAuth client IDs once. Connect saves the current setup first, then
+              opens browser sign-in. Redirect URIs must match your Google Cloud / Azure app
+              settings. These settings identify the app to Google or Microsoft; they do not grant
+              Calendar App a client secret.
             </p>
           </div>
           <button
@@ -294,7 +350,7 @@ export default function ConnectedAccountsPanel({
           onClick={() => setIsTutorialOpen(false)}
         >
           <section
-            className="app-subsurface grid max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] gap-4 overflow-auto rounded-[28px] border border-[var(--border-color)] p-[22px] shadow-[0_28px_70px_var(--shadow-color)]"
+            className="app-subsurface grid max-h-[calc(100vh-48px)] w-[min(1040px,calc(100vw-48px))] gap-4 overflow-auto rounded-[28px] border border-[var(--border-color)] p-[22px] shadow-[0_28px_70px_var(--shadow-color)]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="oauth-tutorial-title"
@@ -309,6 +365,10 @@ export default function ConnectedAccountsPanel({
                 >
                   Finding your OAuth client IDs
                 </h3>
+                <p className="notification-helper-copy m-0">
+                  Calendar App uses public desktop OAuth clients. The redirect URI has to match
+                  exactly in the provider console and in the setup fields below.
+                </p>
               </div>
               <button
                 type="button"
@@ -319,34 +379,127 @@ export default function ConnectedAccountsPanel({
               </button>
             </div>
 
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3.5">
-              <article className="grid gap-2.5 rounded-[20px] border border-[var(--border-color)] bg-[var(--surface-secondary)] p-4">
-                <h4 className="m-0 text-[0.95rem] font-extrabold text-[var(--text-primary)]">Google</h4>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-3.5">
+              <article className="grid content-start gap-3 rounded-[20px] border border-[var(--border-color)] bg-[var(--surface-secondary)] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <h4 className="m-0 text-[0.95rem] font-extrabold text-[var(--text-primary)]">Google</h4>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.googleCloudConsole)}
+                    >
+                      Cloud Console
+                    </button>
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.googleAuthClients)}
+                    >
+                      OAuth clients
+                    </button>
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.googleApiLibrary)}
+                    >
+                      API Library
+                    </button>
+                  </div>
+                </div>
                 <ol className="m-0 pl-[1.1rem] text-[0.88rem] leading-[1.55] text-[var(--text-secondary)]">
-                  <li>Open Google Cloud Console and create or choose a project.</li>
-                  <li>Enable the Google Calendar API. Gmail send is needed for email reminders.</li>
-                  <li>Create an OAuth client for a desktop or native app.</li>
-                  <li>Add this redirect URI: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45781/oauth/google/callback</code></li>
-                  <li>Paste only the client ID into Calendar App, then press Connect Google.</li>
+                  <li>Open Google Cloud Console and create or choose the project for this calendar app.</li>
+                  <li>If Google asks for it, configure the OAuth consent screen. While the app is in testing, add your Google account as a test user.</li>
+                  <li>Open the API Library and enable Google Calendar API. Gmail API / Gmail send access is only needed when you want email reminders.</li>
+                  <li>Open OAuth clients / Credentials and create an OAuth client ID for an installed, native, or desktop app. Do not use a service account for personal calendar sign-in.</li>
+                  <li>Copy only the OAuth client ID. Do not paste the client secret.</li>
+                  <li>Add or keep this exact redirect URI in Calendar App: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45781/oauth/google/callback</code></li>
+                  <li>Paste the client ID into Calendar App, then press Connect Google. Calendar App saves the setup automatically before opening browser sign-in.</li>
                 </ol>
+                <div className="rounded-[16px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-3.5 py-3 text-[0.84rem] leading-[1.5] text-[var(--text-secondary)]">
+                  <strong className="text-[var(--text-primary)]">Google exact-match checks:</strong> the port must be <code className="text-[var(--text-primary)]">45781</code>, the host must be <code className="text-[var(--text-primary)]">127.0.0.1</code>, the protocol must be <code className="text-[var(--text-primary)]">http</code>, and the path must be <code className="break-all text-[var(--text-primary)]">/oauth/google/callback</code>.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                    onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.googleOAuthHelp)}
+                  >
+                    Google OAuth client help
+                  </button>
+                </div>
               </article>
 
-              <article className="grid gap-2.5 rounded-[20px] border border-[var(--border-color)] bg-[var(--surface-secondary)] p-4">
-                <h4 className="m-0 text-[0.95rem] font-extrabold text-[var(--text-primary)]">Outlook / Microsoft</h4>
+              <article className="grid content-start gap-3 rounded-[20px] border border-[var(--border-color)] bg-[var(--surface-secondary)] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <h4 className="m-0 text-[0.95rem] font-extrabold text-[var(--text-primary)]">Outlook / Microsoft</h4>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.azureAccount)}
+                    >
+                      Azure account
+                    </button>
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.azurePortalApps)}
+                    >
+                      Azure apps
+                    </button>
+                    <button
+                      type="button"
+                      className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                      onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.entraApps)}
+                    >
+                      Entra apps
+                    </button>
+                  </div>
+                </div>
                 <ol className="m-0 pl-[1.1rem] text-[0.88rem] leading-[1.55] text-[var(--text-secondary)]">
-                  <li>Open Azure Portal, then App registrations, and create or choose an app.</li>
-                  <li>Add delegated permissions for calendars. Mail send is needed for email reminders.</li>
-                  <li>Add this redirect URI as a public client/native redirect: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45782/oauth/microsoft/callback</code></li>
-                  <li>Copy the Application client ID.</li>
-                  <li>Paste only that client ID into Calendar App, then press Connect Outlook.</li>
+                  <li>Create or open an Azure account, then open Azure Portal or Microsoft Entra admin center.</li>
+                  <li>Go to App registrations and create or choose the app registration for Calendar App.</li>
+                  <li>On the Overview page, copy the Application (client) ID. Do not copy the tenant ID, object ID, client secret, or certificate value.</li>
+                  <li>Go to Authentication, choose Add a platform, then choose Mobile and desktop applications. Do not configure only a Web redirect.</li>
+                  <li>Add this exact custom redirect URI: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45782/oauth/microsoft/callback</code></li>
+                  <li>Go to API permissions and add delegated Microsoft Graph permissions for <code className="text-[var(--text-primary)]">Calendars.Read</code>, <code className="text-[var(--text-primary)]">Calendars.ReadWrite</code>, and <code className="text-[var(--text-primary)]">Mail.Send</code>. Work or school tenants may need admin consent.</li>
+                  <li>Save the Microsoft app changes, paste only the Application (client) ID into Calendar App, then press Connect Outlook. Calendar App saves the setup automatically before opening browser sign-in.</li>
                 </ol>
+                <div className="rounded-[16px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-3.5 py-3 text-[0.84rem] leading-[1.5] text-[var(--text-secondary)]">
+                  <strong className="text-[var(--text-primary)]">Outlook exact-match checks:</strong> Web-only redirects, <code className="text-[var(--text-primary)]">localhost</code> instead of <code className="text-[var(--text-primary)]">127.0.0.1</code>, port changes, <code className="text-[var(--text-primary)]">https</code>, or a missing <code className="break-all text-[var(--text-primary)]">/oauth/microsoft/callback</code> path can break the final connection step.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                    onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.microsoftRedirectHelp)}
+                  >
+                    Microsoft redirect help
+                  </button>
+                  <button
+                    type="button"
+                    className="text-left text-[0.82rem] font-bold text-[var(--accent)] underline underline-offset-4"
+                    onClick={() => handleOpenExternalLink(EXTERNAL_LINKS.microsoftPkceHelp)}
+                  >
+                    Microsoft OAuth flow
+                  </button>
+                </div>
               </article>
             </div>
 
             <div className="rounded-[18px] border border-[color-mix(in_srgb,var(--warning-text)_42%,var(--border-color))] bg-[color-mix(in_srgb,var(--warning-text)_10%,var(--surface-secondary))] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
-              <strong className="text-[var(--text-primary)]">Safety note:</strong> do not paste a client secret here. Calendar App only needs
-              public desktop client IDs. Never share client secrets, refresh tokens, auth codes, or
-              exported app data with tokens inside it.
+              <strong className="text-[var(--text-primary)]">What to paste:</strong> paste only public client IDs. Never paste client secrets,
+              refresh tokens, authorization codes, exported app data with tokens, tenant secrets, or
+              certificate values. Calendar App is designed to stay client-secret-free.
+            </div>
+
+            <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
+              <strong className="text-[var(--text-primary)]">Why this setup exists:</strong> the client ID tells Google or Microsoft which desktop app is asking to sign in. The redirect URI sends the browser result back to Calendar App on this computer. Read permission lets Calendar App list and import calendars you choose. Write permission lets it create or update provider-backed invite events only when you choose provider invite delivery and a target calendar. Mail send permission is only for email reminders.
+            </div>
+
+            <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
+              <strong className="text-[var(--text-primary)]">What Calendar App will not do automatically:</strong> it will not read or import all provider calendars just because the account is connected. It will not rewrite your existing Google or Outlook calendars in the background. It will not send real invites unless an event uses provider invite delivery and you select the sending account and calendar.
             </div>
 
             <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
@@ -355,6 +508,10 @@ export default function ConnectedAccountsPanel({
               ID once, then press Connect again for each account. If the browser auto-picks the wrong
               account, use the provider account picker, another browser profile, or sign out in the
               browser and try again.
+            </div>
+
+            <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
+              <strong className="text-[var(--text-primary)]">Troubleshooting:</strong> if Google shows an unverified app warning, add your account as a test user or publish and verify the app later. If Google says access is blocked, check consent screen status, test users, and enabled APIs. If Microsoft shows an <code className="text-[var(--text-primary)]">AADSTS...</code> error, check the exact redirect URI, Mobile and desktop platform type, delegated permissions, and admin consent. If the local callback page says Calendar connection failed, the browser reached Calendar App and the remaining issue is probably provider configuration or token exchange. If Calendar App stays pending, retry and confirm the browser returned to a <code className="text-[var(--text-primary)]">127.0.0.1</code> callback URL.
             </div>
           </section>
         </div>
@@ -407,10 +564,16 @@ export default function ConnectedAccountsPanel({
                   <button
                     type="button"
                     className="app-button app-button--secondary"
-                    disabled={oauthBusyProvider === account.provider}
-                    onClick={() => onConnectProvider?.(account.provider)}
+                    disabled={oauthBusyProvider === account.provider || isSavingSetup}
+                    onClick={() => handleConnectProvider(account.provider)}
                   >
-                    {needsReconnect ? 'Reconnect' : 'Reconnect'}
+                    {oauthBusyProvider === account.provider
+                      ? 'Reconnecting...'
+                      : isSavingSetup
+                        ? 'Saving setup...'
+                        : needsReconnect
+                          ? 'Reconnect'
+                          : 'Reconnect'}
                   </button>
                   <button
                     type="button"

@@ -26,7 +26,7 @@ export const STORAGE_KEYS = {
 
 export const DEFAULT_PREFERENCES = {
   themeMode: 'system',
-  backgroundMotion: true,
+  backgroundMotion: false,
   developerMode: false,
   name: '',
   countryCode: '',

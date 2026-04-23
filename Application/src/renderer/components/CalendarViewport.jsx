@@ -9,6 +9,8 @@ export default function CalendarViewport({
   headerRef,
   calendarView,
   events,
+  eventDateIndex,
+  todayEvents,
   preferences,
   selectedDate,
   timeZone,
@@ -31,6 +33,8 @@ export default function CalendarViewport({
         <DayView
           headerRef={headerRef}
           events={events}
+          eventDateIndex={eventDateIndex}
+          todayEvents={todayEvents}
           preferences={preferences}
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
@@ -44,6 +48,8 @@ export default function CalendarViewport({
         <MonthView
           headerRef={headerRef}
           events={events}
+          eventDateIndex={eventDateIndex}
+          todayEvents={todayEvents}
           preferences={preferences}
           timeZone={timeZone}
           onCreateEvent={onCreateEvent}
@@ -58,6 +64,8 @@ export default function CalendarViewport({
         <WeekView
           headerRef={headerRef}
           events={events}
+          eventDateIndex={eventDateIndex}
+          todayEvents={todayEvents}
           preferences={preferences}
           timeZone={timeZone}
           selectedDate={selectedDate}
@@ -72,6 +80,8 @@ export default function CalendarViewport({
         <YearView
           headerRef={headerRef}
           events={events}
+          eventDateIndex={eventDateIndex}
+          todayEvents={todayEvents}
           preferences={preferences}
           timeZone={timeZone}
           selectedDate={selectedDate}

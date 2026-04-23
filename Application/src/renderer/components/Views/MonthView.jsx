@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { buildMonthTiles, getWeekdayLabels } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
@@ -40,6 +40,8 @@ function focusMonthDateButton(sourceElement, tileIndex) {
 export default function MonthView({
   headerRef,
   events,
+  eventDateIndex,
+  todayEvents,
   preferences,
   timeZone,
   onCreateEvent,
@@ -55,8 +57,14 @@ export default function MonthView({
   const eventHandlersRef = useRef({ onSingle() {}, onDouble() {} });
   const slotClickRouterRef = useRef(null);
   const eventClickRouterRef = useRef(null);
-  const tiles = buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn);
-  const weekdayLabels = getWeekdayLabels(timeZone, preferences?.weekStartsOn);
+  const tiles = useMemo(
+    () => buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex),
+    [viewDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex]
+  );
+  const weekdayLabels = useMemo(
+    () => getWeekdayLabels(timeZone, preferences?.weekStartsOn),
+    [timeZone, preferences?.weekStartsOn]
+  );
   const monthTitle = formatMonthYear(viewDate);
   const preferredDateKey = getPreferredMonthTileKey(tiles, selectedDate);
   const activeDateKey = focusedDateKey || preferredDateKey;
@@ -133,7 +141,9 @@ export default function MonthView({
         onNext={goToNextMonth}
         previousLabel="Previous month"
         nextLabel="Next month"
-        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
+        secondaryAction={
+          <TodayScheduleControl events={events} todayEvents={todayEvents} preferences={preferences} />
+        }
       />
 
       <div className="calendar-weekdays" aria-hidden="true">
