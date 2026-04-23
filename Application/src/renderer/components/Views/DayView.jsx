@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { isEventOnDate, isSameDay } from '../calendar-helpers';
+import { getDateKey, isEventOnDate, isSameDay } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import SelectedDayDetails from './SelectedDayDetails';
 import TodayScheduleControl from './TodayScheduleControl';
@@ -154,6 +154,8 @@ function focusDaySlot(sourceElement, slotIndex) {
 export default function DayView({
   headerRef,
   events,
+  eventDateIndex,
+  todayEvents,
   preferences,
   selectedDate,
   onCreateEvent,
@@ -171,10 +173,12 @@ export default function DayView({
 
   const dayEvents = useMemo(
     () =>
-      events
-        .filter((event) => isEventOnDate(event, selectedDate))
+      [
+        ...(eventDateIndex?.byDay?.get(getDateKey(selectedDate)) ||
+          events.filter((event) => isEventOnDate(event, selectedDate))),
+      ]
         .sort((left, right) => new Date(left.startsAt) - new Date(right.startsAt)),
-    [events, selectedDate]
+    [events, eventDateIndex, selectedDate]
   );
 
   const dayTitle = selectedDate.toLocaleDateString('en-US', {
@@ -365,7 +369,9 @@ export default function DayView({
         onNext={goToNextDay}
         previousLabel="Previous day"
         nextLabel="Next day"
-        secondaryAction={<TodayScheduleControl events={events} preferences={preferences} />}
+        secondaryAction={
+          <TodayScheduleControl events={events} todayEvents={todayEvents} preferences={preferences} />
+        }
       />
 
       <div

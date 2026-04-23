@@ -5,6 +5,7 @@ export default function Sidebar({
   regionRef,
   availableTags,
   events,
+  eventDateIndex,
   visibleEvents,
   preferences,
   timeZone,
@@ -28,8 +29,8 @@ export default function Sidebar({
   const monthPickerRef = useRef(null);
   const yearPickerRef = useRef(null);
   const tiles = useMemo(
-    () => buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn),
-    [viewDate, events, timeZone, preferences?.weekStartsOn]
+    () => buildMonthTiles(viewDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex),
+    [viewDate, events, timeZone, preferences?.weekStartsOn, eventDateIndex]
   );
   const weekdayLabels = useMemo(
     () => getWeekdayLabels(timeZone, preferences?.weekStartsOn),

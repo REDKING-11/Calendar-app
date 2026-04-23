@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { isEventOnDate } from '../calendar-helpers';
 import { formatTime } from '../../formatting';
 
-export default function TodayScheduleControl({ events, preferences }) {
+export default function TodayScheduleControl({ events, todayEvents: indexedTodayEvents, preferences }) {
   const [isOpen, setIsOpen] = useState(false);
   const userName =
     typeof window !== 'undefined'
@@ -10,12 +10,16 @@ export default function TodayScheduleControl({ events, preferences }) {
       : '';
 
   const todayEvents = useMemo(() => {
+    if (Array.isArray(indexedTodayEvents)) {
+      return indexedTodayEvents;
+    }
+
     const today = new Date();
 
     return events
       .filter((event) => isEventOnDate(event, today))
       .sort((left, right) => new Date(left.startsAt) - new Date(right.startsAt));
-  }, [events]);
+  }, [events, indexedTodayEvents]);
 
   const firstEvent = todayEvents[0] || null;
   const lastEvent = todayEvents[todayEvents.length - 1] || null;

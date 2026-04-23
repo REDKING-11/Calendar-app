@@ -133,6 +133,10 @@ function DeveloperDiagnosticsCard({ debugSnapshot }) {
   );
 }
 
+function getImportFileName(filePath = '') {
+  return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || 'calendar file';
+}
+
 export default function SettingsWindow({
   snapshot,
   preferences,
@@ -141,6 +145,7 @@ export default function SettingsWindow({
   holidayPreloadState,
   onCountryChange,
   onImportHolidays,
+  onImportCalendarFile,
   hosted,
   hostedUrl,
   onHostedUrlChange,
@@ -169,6 +174,8 @@ export default function SettingsWindow({
   const detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const detectedCountryCode = detectCountryCode();
   const [notificationEmailMessage, setNotificationEmailMessage] = useState('');
+  const [calendarImportMessage, setCalendarImportMessage] = useState('');
+  const [isImportingCalendarFile, setIsImportingCalendarFile] = useState(false);
   const [countries, setCountries] = useState(() => getDefaultCountryOptions(detectedCountryCode));
   const allTimeZones = useMemo(() => {
     if (typeof Intl.supportedValuesOf === 'function') {
@@ -208,6 +215,33 @@ export default function SettingsWindow({
     [allTimeZones, preferences.countryCode]
   );
   const hasMappedTimeZones = hasCountryTimezoneMapping(preferences.countryCode);
+
+  const handleImportCalendarFile = async () => {
+    if (!onImportCalendarFile) {
+      setCalendarImportMessage('Calendar file import is not available in this window.');
+      return;
+    }
+
+    setIsImportingCalendarFile(true);
+    setCalendarImportMessage('');
+    try {
+      const result = await onImportCalendarFile();
+      if (result?.canceled) {
+        setCalendarImportMessage('');
+        return;
+      }
+
+      const importedCount = Number(result?.importedCount || 0);
+      const fileName = getImportFileName(result?.path);
+      setCalendarImportMessage(
+        `Imported ${importedCount} event${importedCount === 1 ? '' : 's'} from ${fileName}.`
+      );
+    } catch (error) {
+      setCalendarImportMessage(error?.message || 'Calendar file could not be imported.');
+    } finally {
+      setIsImportingCalendarFile(false);
+    }
+  };
 
   return (
     <main className="settings-shell">
@@ -396,7 +430,7 @@ export default function SettingsWindow({
         <SettingsCard
           eyebrow="Accounts"
           title="Connected calendar accounts"
-          description="Use Google and Outlook accounts for imports, reminders, and provider-backed event invites."
+          description="Connect Google or Outlook only for online calendar features. A local file import does not need any account."
         >
           <ConnectedAccountsPanel
             connectedAccounts={connectedAccounts}
@@ -410,6 +444,31 @@ export default function SettingsWindow({
             accountBusyId={accountBusyId}
             oauthStatusMessage={oauthStatusMessage}
           />
+        </SettingsCard>
+
+        <SettingsCard
+          eyebrow="Import"
+          title="Calendar file import"
+          description="Bring in a normal .ics calendar file or a Calendar App .json bundle from this computer. This does not sign in to Google, Outlook, Microsoft, or any online account."
+        >
+          <div className="settings-subcard">
+            <p className="settings-stat-label">Local files only</p>
+            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+              Use this for exported calendars, downloaded .ics files, or Calendar App backups.
+              Connected accounts are separate and only needed for online provider features.
+            </p>
+            <button
+              type="button"
+              className="app-button app-button--secondary mt-4"
+              disabled={isImportingCalendarFile}
+              onClick={handleImportCalendarFile}
+            >
+              {isImportingCalendarFile ? 'Importing calendar...' : 'Import calendar file'}
+            </button>
+            {calendarImportMessage ? (
+              <p className="notification-helper-copy mt-3">{calendarImportMessage}</p>
+            ) : null}
+          </div>
         </SettingsCard>
 
         <SettingsCard

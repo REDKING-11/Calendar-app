@@ -20,6 +20,7 @@ async function openSettingsWindow() {
 contextBridge.exposeInMainWorld('calendarApp', {
   platform: process.platform,
   openSettingsWindow,
+  openExternalLink: (url) => ipcRenderer.invoke('app:openExternalLink', url),
   closeCurrentWindow: () => ipcRenderer.invoke('app:closeCurrentWindow'),
   getSnapshot: () => ipcRenderer.invoke('calendar:getSnapshot'),
   createEvent: (input) => ipcRenderer.invoke('calendar:createEvent', input),
@@ -29,6 +30,7 @@ contextBridge.exposeInMainWorld('calendarApp', {
   importExternalCalendar: (input) => ipcRenderer.invoke('calendar:importExternalCalendar', input),
   refreshExternalSource: (input) => ipcRenderer.invoke('calendar:refreshExternalSource', input),
   importData: (input) => ipcRenderer.invoke('calendar:importData', input),
+  importDataFromFilePicker: () => ipcRenderer.invoke('calendar:importDataFromFilePicker'),
   exportData: (input) => ipcRenderer.invoke('calendar:exportData', input),
   renameTag: (input) => ipcRenderer.invoke('calendar:renameTag', input),
   deleteTag: (tagId) => ipcRenderer.invoke('calendar:deleteTag', tagId),

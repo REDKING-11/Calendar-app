@@ -44,6 +44,7 @@ const LEGACY_DEMO_EVENT_TITLES = new Set([
 ]);
 const CURRENT_SCHEMA_VERSION = 7;
 const LOCAL_TRANSPORT_SESSION_TTL_MS = 10 * 60 * 1000;
+const MAX_STORED_REMINDER_MINUTES = 365 * 24 * 60;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 function normalizeSourceLinkStatus(value = 'active') {
@@ -808,6 +809,12 @@ class CalendarStore {
   countAuditEvents() {
     return Number(
       this.db.prepare('SELECT COUNT(*) AS count FROM security_audit_log').get()?.count || 0
+    );
+  }
+
+  countChangeSummaries() {
+    return Number(
+      this.db.prepare('SELECT COUNT(*) AS count FROM change_log').get()?.count || 0
     );
   }
 
@@ -2248,24 +2255,29 @@ class CalendarStore {
     });
   }
 
-  snapshot() {
+  snapshot({ includeChanges = false } = {}) {
     const events = this.listEvents(false);
-    const changes = this.listChangeSummaries();
+    const changeCount = this.countChangeSummaries();
 
-    return {
+    const nextSnapshot = {
       deviceId: this.deviceId,
       lastSequence: Number(this.getMeta('lastSequence') || '0'),
       events,
       tags: this.getTagCatalogSnapshot(),
       externalCalendarSources: this.listExternalCalendarSources(),
       externalEventLinks: this.listExternalEventLinks(),
-      changes,
       stats: {
         activeEventCount: events.length,
-        changeCount: changes.length,
+        changeCount,
       },
       security: this.getSecuritySnapshot(),
     };
+
+    if (includeChanges) {
+      nextSnapshot.changes = this.listChangeSummaries();
+    }
+
+    return nextSnapshot;
   }
 
   getSecuritySnapshot() {
@@ -3214,6 +3226,35 @@ class CalendarStore {
     };
   }
 
+  async importDataFromFilePicker() {
+    if (!this.dialog?.showOpenDialog) {
+      throw new Error('File picker is not available.');
+    }
+
+    const openResult = await this.dialog.showOpenDialog({
+      title: 'Import calendar file',
+      buttonLabel: 'Import',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Calendar files', extensions: ['ics', 'json'] },
+        { name: 'iCalendar', extensions: ['ics'] },
+        { name: 'Calendar App bundle', extensions: ['json'] },
+      ],
+    });
+
+    const [filePath] = openResult?.filePaths || [];
+    if (!openResult || openResult.canceled || !filePath) {
+      return {
+        canceled: true,
+      };
+    }
+
+    return {
+      canceled: false,
+      ...this.importData({ path: filePath }),
+    };
+  }
+
   exportData({ format, path: filePath, scope = 'all' }) {
     const detectedFormat = this.resolveTransferFormat(format, filePath);
     const resolvedPath = this.resolveTransferPath(
@@ -4159,8 +4200,31 @@ class CalendarStore {
   listDueReminderEntries({ now = new Date(), gracePeriodMinutes = 5 } = {}) {
     const nowDate = now instanceof Date ? now : new Date(now);
     const lowerBound = new Date(nowDate.getTime() - Number(gracePeriodMinutes || 5) * 60 * 1000);
+    const candidateStartsAfter = new Date(
+      lowerBound.getTime() + 1 * 60 * 1000
+    ).toISOString();
+    const candidateStartsBefore = new Date(
+      nowDate.getTime() + MAX_STORED_REMINDER_MINUTES * 60 * 1000
+    ).toISOString();
+    const candidateRows = this.db
+      .prepare(
+        `SELECT id
+         FROM event_metadata
+         WHERE deleted = 0
+           AND starts_at >= :candidateStartsAfter
+           AND starts_at <= :candidateStartsBefore
+         ORDER BY starts_at ASC`
+      )
+      .all({
+        candidateStartsAfter,
+        candidateStartsBefore,
+      });
+    const candidateEvents = candidateRows.flatMap((row) => {
+      const event = this.getEventById(row.id);
+      return event ? [event] : [];
+    });
 
-    return this.listEvents(false).flatMap((event) => {
+    return candidateEvents.flatMap((event) => {
       const notifications = normalizeStoredNotifications(event);
 
       return notifications.flatMap((notification) => {

@@ -88,11 +88,12 @@ function createMockSafeStorage() {
   };
 }
 
-function createStoreFixture(prefix) {
+function createStoreFixture(prefix, options = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const store = new CalendarStore(tempDir, {
     safeStorage: createMockSafeStorage(),
     shell: { openExternal() {} },
+    ...options,
   });
 
   return {
@@ -1231,7 +1232,9 @@ function testNewStoreStartsWithoutDemoSeed() {
   try {
     const snapshot = fixture.store.snapshot();
     assert.equal(snapshot.events.length, 0);
-    assert.equal(snapshot.changes.length, 0);
+    assert.equal(snapshot.changes, undefined);
+    assert.equal(snapshot.stats.changeCount, 0);
+    assert.equal(fixture.store.snapshot({ includeChanges: true }).changes.length, 0);
     assert.equal(fixture.store.getDemoSeedState(), 'disabled');
   } finally {
     fixture.cleanup();
@@ -1910,6 +1913,69 @@ function testBundleAndIcsImportExport() {
   }
 }
 
+async function testFilePickerImportFlow() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'calendar-store-picker-files-'));
+  const icsPath = path.join(tempDir, 'picked-calendar.ics');
+  fs.writeFileSync(
+    icsPath,
+    [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Calendar App Test//EN',
+      'BEGIN:VEVENT',
+      'UID:picked-event-1',
+      'SUMMARY:Picked file event',
+      'DTSTART:20260416T090000Z',
+      'DTEND:20260416T100000Z',
+      'END:VEVENT',
+      'END:VCALENDAR',
+      '',
+    ].join('\r\n'),
+    'utf8'
+  );
+
+  const canceledFixture = createStoreFixture('calendar-store-picker-cancel-', {
+    dialog: {
+      async showOpenDialog() {
+        return { canceled: true, filePaths: [] };
+      },
+    },
+  });
+  const importFixture = createStoreFixture('calendar-store-picker-import-', {
+    dialog: {
+      async showOpenDialog(options = {}) {
+        assert.equal(options.title, 'Import calendar file');
+        assert.equal(options.properties.includes('openFile'), true);
+        assert.equal(
+          options.filters.some((filter) => filter.extensions.includes('ics')),
+          true
+        );
+        return { canceled: false, filePaths: [icsPath] };
+      },
+    },
+  });
+
+  try {
+    const canceled = await canceledFixture.store.importDataFromFilePicker();
+    assert.equal(canceled.canceled, true);
+    assert.equal(canceledFixture.store.snapshot().events.length, 0);
+
+    const imported = await importFixture.store.importDataFromFilePicker();
+    assert.equal(imported.canceled, false);
+    assert.equal(imported.format, 'ics');
+    assert.equal(imported.importedCount, 1);
+    assert.equal(imported.path, path.resolve(icsPath));
+    assert.equal(
+      imported.snapshot.events.some((event) => event.title === 'Picked file event'),
+      true
+    );
+  } finally {
+    canceledFixture.cleanup();
+    importFixture.cleanup();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function testLocalTransportSession() {
   const fixture = createStoreFixture('calendar-store-transport-');
 
@@ -2056,6 +2122,7 @@ async function main() {
     ['external_calendar_import_refresh_and_detach', testExternalCalendarImportRefreshAndDetach],
     ['outbound_provider_invite_flow', testOutboundProviderInviteFlow],
     ['bundle_and_ics_import_export', testBundleAndIcsImportExport],
+    ['file_picker_import_flow', testFilePickerImportFlow],
     ['local_transport_session', testLocalTransportSession],
     ['oauth_client_config_persistence', testOAuthClientConfigPersistence],
     ['reminder_service_dispatch', testReminderServiceDispatch],
