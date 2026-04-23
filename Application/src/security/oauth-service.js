@@ -3,6 +3,7 @@ const http = require('node:http');
 
 const GOOGLE_GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const MICROSOFT_MAIL_SEND_SCOPE = 'Mail.Send';
+const MICROSOFT_DEFAULT_AUTHORITY = 'common';
 const TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 const OAUTH_PROVIDER_SETUP = {
   google: {
@@ -17,9 +18,12 @@ const OAUTH_PROVIDER_SETUP = {
     label: 'Outlook',
     clientIdEnv: 'CALENDAR_MICROSOFT_CLIENT_ID',
     redirectUriEnv: 'CALENDAR_MICROSOFT_REDIRECT_URI',
+    authorityEnv: 'CALENDAR_MICROSOFT_AUTHORITY',
     clientIdMetaKey: 'oauth.microsoft.clientId',
     redirectUriMetaKey: 'oauth.microsoft.redirectUri',
-    defaultRedirectUri: 'http://127.0.0.1:45782/oauth/microsoft/callback',
+    authorityMetaKey: 'oauth.microsoft.authority',
+    defaultRedirectUri: 'http://localhost:45782/oauth/microsoft/callback',
+    defaultAuthority: MICROSOFT_DEFAULT_AUTHORITY,
   },
 };
 
@@ -87,6 +91,102 @@ function sanitizeOAuthRedirectUri(value, provider) {
   } catch (_error) {
     throw new Error('OAuth redirect URI must be a localhost HTTP URL with a port.');
   }
+}
+
+function sanitizeMicrosoftAuthority(value) {
+  const candidate = String(value || '').trim().toLowerCase() || MICROSOFT_DEFAULT_AUTHORITY;
+  if (!/^[a-z0-9][a-z0-9._-]{0,199}$/i.test(candidate)) {
+    throw new Error(
+      'Microsoft authority must be "common", "organizations", "consumers", or a tenant domain/GUID.'
+    );
+  }
+
+  return candidate;
+}
+
+function buildMicrosoftAuthorityBase(authority = MICROSOFT_DEFAULT_AUTHORITY) {
+  return `https://login.microsoftonline.com/${encodeURIComponent(
+    sanitizeMicrosoftAuthority(authority)
+  )}/oauth2/v2.0`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function normalizeOAuthErrorText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getMicrosoftOAuthHints(config = {}, error = '', errorDescription = '') {
+  const detail = `${error} ${errorDescription}`.toLowerCase();
+  const redirectUri = config.redirectUri || OAUTH_PROVIDER_SETUP.microsoft.defaultRedirectUri;
+  const authority = sanitizeMicrosoftAuthority(
+    config.authority || OAUTH_PROVIDER_SETUP.microsoft.defaultAuthority
+  );
+
+  const hints = [
+    `Check Microsoft Entra Authentication -> Mobile and desktop applications and make sure the redirect URI matches exactly: ${redirectUri}.`,
+    `Match the Microsoft authority to the app registration: "common" for multitenant + personal, "organizations" for work/school only, "consumers" for personal-only, or your tenant domain/GUID for single-tenant apps.`,
+  ];
+
+  if (
+    detail.includes('invalid_request') ||
+    detail.includes('not valid for the app') ||
+    detail.includes('tenant') ||
+    detail.includes('audience') ||
+    detail.includes('account')
+  ) {
+    hints.push(
+      `The app is currently using the "${authority}" authority. If your registration is single-tenant, switch Calendar App to your tenant domain or GUID.`
+    );
+  }
+
+  if (String(redirectUri).includes('127.0.0.1')) {
+    hints.push(
+      'Microsoft Learn notes that HTTP 127.0.0.1 loopback URIs need app-manifest editing instead of the normal Redirect URIs text box. Using localhost is the simpler portal setup.'
+    );
+  }
+
+  return hints;
+}
+
+function buildOAuthCallbackErrorPage(config = {}, error = '', errorDescription = '', errorUri = '') {
+  const providerLabel = OAUTH_PROVIDER_SETUP[config.provider]?.label || 'Provider';
+  const description =
+    normalizeOAuthErrorText(errorDescription) ||
+    normalizeOAuthErrorText(error) ||
+    'The sign-in could not be completed.';
+  const hints =
+    config.provider === 'microsoft'
+      ? getMicrosoftOAuthHints(config, error, description)
+      : [];
+  const hintMarkup = hints.length
+    ? `<h2>What to check</h2><ul>${hints
+        .map((hint) => `<li>${escapeHtml(hint)}</li>`)
+        .join('')}</ul>`
+    : '';
+  const errorUriMarkup = errorUri
+    ? `<p>More info: <a href="${escapeHtml(errorUri)}">${escapeHtml(errorUri)}</a></p>`
+    : '';
+
+  return `<!doctype html>
+<html>
+  <body>
+    <h1>${escapeHtml(providerLabel)} connection failed</h1>
+    <p>${escapeHtml(description)}</p>
+    ${hintMarkup}
+    ${errorUriMarkup}
+    <p>You can close this tab and try again.</p>
+  </body>
+</html>`;
 }
 
 function decodeJwtPayload(token) {
@@ -488,8 +588,13 @@ class OAuthService {
     const envClientId = process.env[setup.clientIdEnv] || '';
     const storedRedirectUri = this.getMetaValue(setup.redirectUriMetaKey);
     const envRedirectUri = process.env[setup.redirectUriEnv] || '';
+    const storedAuthority = setup.authorityMetaKey ? this.getMetaValue(setup.authorityMetaKey) : '';
+    const envAuthority = setup.authorityEnv ? process.env[setup.authorityEnv] || '' : '';
     const clientId = storedClientId || envClientId || '';
     const redirectUri = storedRedirectUri || envRedirectUri || setup.defaultRedirectUri;
+    const authority = setup.defaultAuthority
+      ? sanitizeMicrosoftAuthority(storedAuthority || envAuthority || setup.defaultAuthority)
+      : '';
 
     return {
       ...setup,
@@ -498,6 +603,14 @@ class OAuthService {
       clientIdSource: storedClientId ? 'settings' : envClientId ? 'environment' : '',
       redirectUri,
       redirectUriSource: storedRedirectUri ? 'settings' : envRedirectUri ? 'environment' : 'default',
+      authority,
+      authoritySource: setup.defaultAuthority
+        ? storedAuthority
+          ? 'settings'
+          : envAuthority
+            ? 'environment'
+            : 'default'
+        : '',
     };
   }
 
@@ -516,6 +629,9 @@ class OAuthService {
             redirectUri: setup.redirectUri,
             redirectUriSource: setup.redirectUriSource,
             defaultRedirectUri: setup.defaultRedirectUri,
+            authority: setup.authority,
+            authoritySource: setup.authoritySource,
+            defaultAuthority: setup.defaultAuthority || '',
           },
         ];
       })
@@ -538,6 +654,13 @@ class OAuthService {
         this.setMetaValue(
           setup.redirectUriMetaKey,
           sanitizeOAuthRedirectUri(providerInput.redirectUri, provider)
+        );
+      }
+
+      if (provider === 'microsoft' && Object.prototype.hasOwnProperty.call(providerInput, 'authority')) {
+        this.setMetaValue(
+          setup.authorityMetaKey,
+          sanitizeMicrosoftAuthority(providerInput.authority)
         );
       }
     }
@@ -610,13 +733,15 @@ class OAuthService {
 
     if (provider === 'microsoft') {
       const clientSetup = this.getResolvedClientSetup(provider);
+      const authorityBase = buildMicrosoftAuthorityBase(clientSetup.authority);
       return {
         provider,
         clientId: clientSetup.clientId,
-        authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
-        tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+        authUrl: `${authorityBase}/authorize`,
+        tokenUrl: `${authorityBase}/token`,
         revokeUrl: null,
         redirectUri: clientSetup.redirectUri,
+        authority: clientSetup.authority,
         readScopes: ['openid', 'profile', 'email', 'offline_access', 'Calendars.Read'],
         writeScopes: ['Calendars.ReadWrite', MICROSOFT_MAIL_SEND_SCOPE],
         extraParams: {},
@@ -702,12 +827,12 @@ class OAuthService {
       const state = requestUrl.searchParams.get('state');
       const code = requestUrl.searchParams.get('code');
       const error = requestUrl.searchParams.get('error');
+      const errorDescription = requestUrl.searchParams.get('error_description');
+      const errorUri = requestUrl.searchParams.get('error_uri');
 
       if (error) {
         response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
-        response.end(
-          `<html><body><h1>Calendar connection failed</h1><p>${error}</p><p>You can close this tab and try again.</p></body></html>`
-        );
+        response.end(buildOAuthCallbackErrorPage(config, error, errorDescription, errorUri));
         return;
       }
 
@@ -723,12 +848,16 @@ class OAuthService {
         const account = await this.finishConnectByState(state, code);
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end(
-          `<html><body><h1>Calendar connection complete</h1><p>${account?.email || account?.displayName || 'Account'} is now connected.</p><p>You can close this tab and return to the app.</p></body></html>`
+          `<!doctype html><html><body><h1>Calendar connection complete</h1><p>${escapeHtml(
+            account?.email || account?.displayName || 'Account'
+          )} is now connected.</p><p>You can close this tab and return to the app.</p></body></html>`
         );
       } catch (callbackError) {
         response.writeHead(500, { 'content-type': 'text/html; charset=utf-8' });
         response.end(
-          `<html><body><h1>Calendar connection failed</h1><p>${callbackError?.message || 'The sign-in could not be completed.'}</p><p>You can close this tab and try again.</p></body></html>`
+          `<!doctype html><html><body><h1>Calendar connection failed</h1><p>${escapeHtml(
+            callbackError?.message || 'The sign-in could not be completed.'
+          )}</p><p>You can close this tab and try again.</p></body></html>`
         );
       }
     });

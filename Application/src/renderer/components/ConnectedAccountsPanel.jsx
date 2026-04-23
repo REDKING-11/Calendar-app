@@ -17,9 +17,12 @@ const DEFAULT_OAUTH_CLIENT_CONFIG = {
     clientId: '',
     clientIdConfigured: false,
     clientIdSource: '',
-    redirectUri: 'http://127.0.0.1:45782/oauth/microsoft/callback',
+    redirectUri: 'http://localhost:45782/oauth/microsoft/callback',
     redirectUriSource: 'default',
-    defaultRedirectUri: 'http://127.0.0.1:45782/oauth/microsoft/callback',
+    defaultRedirectUri: 'http://localhost:45782/oauth/microsoft/callback',
+    authority: 'common',
+    authoritySource: 'default',
+    defaultAuthority: 'common',
   },
 };
 
@@ -89,6 +92,7 @@ function buildConfigDraft(oauthClientConfig = {}) {
         {
           clientId: providerConfig.clientId || '',
           redirectUri: providerConfig.redirectUri || providerConfig.defaultRedirectUri || '',
+          authority: providerConfig.authority || providerConfig.defaultAuthority || '',
         },
       ];
     })
@@ -336,6 +340,26 @@ export default function ConnectedAccountsPanel({
                     }
                   />
                 </label>
+                {provider.id === 'microsoft' ? (
+                  <>
+                    <label className="settings-field">
+                      <span>Authority / tenant</span>
+                      <input
+                        type="text"
+                        className="app-input"
+                        value={providerDraft.authority || ''}
+                        placeholder={provider.clientConfig.defaultAuthority || 'common'}
+                        onChange={(event) =>
+                          handleSetupFieldChange(provider.id, 'authority', event.target.value)
+                        }
+                      />
+                    </label>
+                    <p className="notification-helper-copy m-0">
+                      Use <code className="text-[var(--text-primary)]">common</code> for mixed
+                      work/personal sign-in, <code className="text-[var(--text-primary)]">organizations</code> for work or school only, <code className="text-[var(--text-primary)]">consumers</code> for personal-only, or your tenant domain/GUID for a single-tenant app.
+                    </p>
+                  </>
+                ) : null}
               </article>
             );
           })}
@@ -462,12 +486,13 @@ export default function ConnectedAccountsPanel({
                   <li>Go to App registrations and create or choose the app registration for Calendar App.</li>
                   <li>On the Overview page, copy the Application (client) ID. Do not copy the tenant ID, object ID, client secret, or certificate value.</li>
                   <li>Go to Authentication, choose Add a platform, then choose Mobile and desktop applications. Do not configure only a Web redirect.</li>
-                  <li>Add this exact custom redirect URI: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45782/oauth/microsoft/callback</code></li>
+                  <li>Add this redirect URI for the simplest portal setup: <code className="break-all text-[var(--text-primary)]">http://localhost:45782/oauth/microsoft/callback</code></li>
+                  <li>Make sure Supported account types matches who should sign in. Calendar App authority <code className="text-[var(--text-primary)]">common</code> expects a multitenant app, <code className="text-[var(--text-primary)]">organizations</code> is work/school only, <code className="text-[var(--text-primary)]">consumers</code> is personal-only, and a tenant domain/GUID is for single-tenant apps.</li>
                   <li>Go to API permissions and add delegated Microsoft Graph permissions for <code className="text-[var(--text-primary)]">Calendars.Read</code>, <code className="text-[var(--text-primary)]">Calendars.ReadWrite</code>, and <code className="text-[var(--text-primary)]">Mail.Send</code>. Work or school tenants may need admin consent.</li>
-                  <li>Save the Microsoft app changes, paste only the Application (client) ID into Calendar App, then press Connect Outlook. Calendar App saves the setup automatically before opening browser sign-in.</li>
+                  <li>Save the Microsoft app changes, paste only the Application (client) ID into Calendar App, leave the Microsoft authority on <code className="text-[var(--text-primary)]">common</code> unless your app registration needs a different audience, then press Connect Outlook.</li>
                 </ol>
                 <div className="rounded-[16px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-3.5 py-3 text-[0.84rem] leading-[1.5] text-[var(--text-secondary)]">
-                  <strong className="text-[var(--text-primary)]">Outlook exact-match checks:</strong> Web-only redirects, <code className="text-[var(--text-primary)]">localhost</code> instead of <code className="text-[var(--text-primary)]">127.0.0.1</code>, port changes, <code className="text-[var(--text-primary)]">https</code>, or a missing <code className="break-all text-[var(--text-primary)]">/oauth/microsoft/callback</code> path can break the final connection step.
+                  <strong className="text-[var(--text-primary)]">Outlook exact-match checks:</strong> for the normal portal flow, keep <code className="text-[var(--text-primary)]">http://localhost:45782/oauth/microsoft/callback</code> on the Mobile and desktop platform. If you prefer <code className="text-[var(--text-primary)]">127.0.0.1</code>, Microsoft Learn says the HTTP loopback IP version currently needs app-manifest editing instead of the normal Redirect URIs text box.
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -511,7 +536,7 @@ export default function ConnectedAccountsPanel({
             </div>
 
             <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
-              <strong className="text-[var(--text-primary)]">Troubleshooting:</strong> if Google shows an unverified app warning, add your account as a test user or publish and verify the app later. If Google says access is blocked, check consent screen status, test users, and enabled APIs. If Microsoft shows an <code className="text-[var(--text-primary)]">AADSTS...</code> error, check the exact redirect URI, Mobile and desktop platform type, delegated permissions, and admin consent. If the local callback page says Calendar connection failed, the browser reached Calendar App and the remaining issue is probably provider configuration or token exchange. If Calendar App stays pending, retry and confirm the browser returned to a <code className="text-[var(--text-primary)]">127.0.0.1</code> callback URL.
+              <strong className="text-[var(--text-primary)]">Troubleshooting:</strong> if Google shows an unverified app warning, add your account as a test user or publish and verify the app later. If Google says access is blocked, check consent screen status, test users, and enabled APIs. If Microsoft shows an <code className="text-[var(--text-primary)]">AADSTS...</code> or <code className="text-[var(--text-primary)]">invalid_request</code> error, check the Mobile and desktop redirect URI, supported account types, Microsoft authority value, delegated permissions, and admin consent. If the local callback page says Calendar connection failed, the browser reached Calendar App and the remaining issue is probably provider configuration or token exchange. If Calendar App stays pending, retry and confirm the browser returned to your configured localhost callback URL.
             </div>
           </section>
         </div>

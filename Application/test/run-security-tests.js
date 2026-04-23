@@ -2029,10 +2029,12 @@ function testOAuthClientConfigPersistence() {
   const previousGoogleRedirectUri = process.env.CALENDAR_GOOGLE_REDIRECT_URI;
   const previousMicrosoftClientId = process.env.CALENDAR_MICROSOFT_CLIENT_ID;
   const previousMicrosoftRedirectUri = process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
+  const previousMicrosoftAuthority = process.env.CALENDAR_MICROSOFT_AUTHORITY;
   delete process.env.CALENDAR_GOOGLE_CLIENT_ID;
   delete process.env.CALENDAR_GOOGLE_REDIRECT_URI;
   delete process.env.CALENDAR_MICROSOFT_CLIENT_ID;
   delete process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
+  delete process.env.CALENDAR_MICROSOFT_AUTHORITY;
 
   const fixture = createStoreFixture('calendar-store-oauth-config-');
 
@@ -2053,12 +2055,15 @@ function testOAuthClientConfigPersistence() {
       microsoft: {
         clientId: '00000000-0000-0000-0000-000000000000',
         redirectUri: 'http://localhost:45782/oauth/microsoft/callback',
+        authority: 'consumers',
       },
     });
 
     assert.equal(updated.security.auth.clientConfig.google.clientIdConfigured, true);
     assert.equal(updated.security.auth.clientConfig.google.clientIdSource, 'settings');
     assert.equal(updated.security.auth.clientConfig.microsoft.clientIdConfigured, true);
+    assert.equal(updated.security.auth.clientConfig.microsoft.authority, 'consumers');
+    assert.equal(updated.security.auth.clientConfig.microsoft.defaultAuthority, 'common');
     assert.equal(
       fixture.store.getAvailableProviders().find((provider) => provider.id === 'google').configured,
       true
@@ -2066,6 +2071,14 @@ function testOAuthClientConfigPersistence() {
     assert.equal(
       fixture.store.getAvailableProviders().find((provider) => provider.id === 'microsoft').configured,
       true
+    );
+    assert.equal(
+      fixture.store.oauthService.getProviderConfig('microsoft').authUrl,
+      'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize'
+    );
+    assert.equal(
+      fixture.store.oauthService.getProviderConfig('microsoft').tokenUrl,
+      'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
     );
 
     assert.throws(
@@ -2076,6 +2089,15 @@ function testOAuthClientConfigPersistence() {
           },
         }),
       /localhost HTTP URL/
+    );
+    assert.throws(
+      () =>
+        fixture.store.updateOAuthClientConfig({
+          microsoft: {
+            authority: 'bad authority/segment',
+          },
+        }),
+      /Microsoft authority must be/
     );
   } finally {
     fixture.cleanup();
@@ -2098,6 +2120,11 @@ function testOAuthClientConfigPersistence() {
       delete process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
     } else {
       process.env.CALENDAR_MICROSOFT_REDIRECT_URI = previousMicrosoftRedirectUri;
+    }
+    if (previousMicrosoftAuthority === undefined) {
+      delete process.env.CALENDAR_MICROSOFT_AUTHORITY;
+    } else {
+      process.env.CALENDAR_MICROSOFT_AUTHORITY = previousMicrosoftAuthority;
     }
   }
 }
