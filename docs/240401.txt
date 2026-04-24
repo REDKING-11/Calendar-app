@@ -1,0 +1,164 @@
+Calendar App - Implementation Change Notes
+Date: 2026-04-24
+Format: plain text documentation summary
+
+This document records the main changes made during the April 24 work pass.
+It is written as a project note rather than a Git diff. The focus of this pass
+was provider invite reliability, connected account cleanup, remote calendar
+import usability, and OAuth setup form stability.
+
+
+1. All-day provider invite duration fix
+---------------------------------------
+
+Updating an all-day event while sending real provider invites could fail with:
+
+Error invoking remote method 'calendar:updateEvent': Error: [VAL-422] Your
+request can't be completed. The duration of an event marked as All day must be
+at least 24 hours.
+
+The root cause was that an existing all-day event could keep isAllDay=true while
+the edit payload supplied a short timed start/end range. That invalid range was
+then sent to the provider before local persistence.
+
+Changes:
+- added an all-day duration normalizer in the calendar store
+- all-day events shorter than 24 hours now have endsAt extended to at least
+  24 hours after startsAt
+- the normalization runs for both createEvent and updateEvent paths
+- provider invite sync receives the corrected event shape before calling Google
+  or Microsoft
+- local persistence stores the corrected all-day range too
+
+Regression coverage:
+- added an outbound provider invite test that updates an all-day event with a
+  one-hour range
+- the test verifies the provider update receives a 24-hour duration
+- the test verifies the stored event ends at the corrected timestamp
+
+Main areas involved:
+- Application/src/data/calendar-store.js
+- Application/test/run-security-tests.js
+
+
+2. Account revoke now removes local account options
+---------------------------------------------------
+
+Revoking a connected account previously behaved too much like a local
+disconnect. The account could remain visible in the connected account list or in
+downstream option lists even after the user intended to revoke access.
+
+The revoke behavior is now clearer:
+- Revoke attempts remote provider revocation when the provider supports it.
+- Local token records are deleted.
+- The local connected account row is deleted.
+- The account disappears from the connected account panel and option lists.
+- Remote revoke failures no longer prevent local cleanup.
+
+This matters especially for providers or network conditions where the remote
+revocation endpoint is unavailable. The app should still be able to forget the
+local connection and stop presenting it as usable.
+
+Regression coverage:
+- added a test that inserts a connected Google account and token record
+- the test simulates the provider revoke endpoint failing
+- the test verifies the local account is still removed from the security
+  snapshot and account list
+
+Main areas involved:
+- Application/src/security/oauth-service.js
+- Application/test/run-security-tests.js
+
+
+3. Connected account calendar import UI
+---------------------------------------
+
+The backend already supported listing and importing external calendars from a
+connected Google or Outlook account, but the connected account settings panel did
+not expose a direct button for that workflow.
+
+The connected account interface now includes remote calendar import controls:
+- connected accounts show a "Show calendars to import" button
+- pressing it loads the provider calendars for that account
+- returned calendars are listed under the account card
+- each remote calendar has an Import button
+- already imported calendars are marked as Imported and cannot be imported again
+  from the same list item
+- loading, importing, empty-list, and error states are shown inline
+
+The import action calls the existing calendar:importExternalCalendar IPC path,
+updates the app snapshot, and reports how many events were imported or updated.
+
+The same connected account panel is used in Settings and onboarding, so the new
+calendar import controls were wired through both places.
+
+Main areas involved:
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/renderer.jsx
+
+
+4. OAuth setup form refresh stability
+-------------------------------------
+
+The OAuth setup fields could reset while the connection interface was polling or
+refreshing. This was most visible in the Microsoft authority field: changing it
+from common to another value could snap back to common before the edit was
+completed.
+
+The root cause was that the connected account panel rebuilt its local setup draft
+whenever a refreshed snapshot supplied a new oauthClientConfig object, even when
+the actual saved OAuth values had not changed.
+
+Changes:
+- the setup draft now tracks a signature of the saved OAuth field values
+- refreshed snapshot objects no longer reset in-progress edits unless the saved
+  values actually changed
+- the Microsoft authority field can now be edited to organizations, consumers,
+  common, or a tenant value without being overwritten by polling refreshes
+
+Main area involved:
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+
+
+5. Verification
+---------------
+
+The full security and calendar regression suite was run after the changes:
+- npm test
+
+Result:
+- all tests passed
+
+Renderer JSX syntax was also checked with Babel transforms for the touched
+renderer files:
+- ConnectedAccountsPanel.jsx
+- SettingsWindow.jsx
+- introduction.jsx
+- renderer.jsx
+
+Result:
+- transform checks passed
+
+A Vite renderer build command was also tried, but this project does not have a
+vite.renderer.config.mjs file. The app uses Electron Forge with webpack instead,
+so that Vite command is not applicable for this repository.
+
+
+6. Files changed in this pass
+-----------------------------
+
+Main implementation files:
+- Application/src/data/calendar-store.js
+- Application/src/security/oauth-service.js
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/renderer.jsx
+
+Test file:
+- Application/test/run-security-tests.js
+
+Documentation file:
+- docs/240401.txt

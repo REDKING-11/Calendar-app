@@ -32,6 +32,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+const ALL_DAY_MINIMUM_DURATION_MS = 24 * 60 * 60 * 1000;
 const HOLIDAY_SEED_STATE_META_KEY = 'holidaySeedState';
 const HOLIDAY_TAG_COLOR = '#b91c1c';
 const COUNTRY_TAG_COLOR = '#2563eb';
@@ -118,6 +119,27 @@ function cloneScopeValue(scope = 'all') {
 
 function createId(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function normalizeAllDayEventDuration(event = {}) {
+  if (!event.isAllDay) {
+    return event;
+  }
+
+  const startsAt = new Date(event.startsAt);
+  const endsAt = new Date(event.endsAt);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    return event;
+  }
+
+  if (endsAt.getTime() - startsAt.getTime() >= ALL_DAY_MINIMUM_DURATION_MS) {
+    return event;
+  }
+
+  return {
+    ...event,
+    endsAt: new Date(startsAt.getTime() + ALL_DAY_MINIMUM_DURATION_MS).toISOString(),
+  };
 }
 
 function getHolidaySeedYears() {
@@ -3425,9 +3447,11 @@ class CalendarStore {
   }
 
   createEvent(input) {
-    const sanitized = sanitizeEventCreateInput(input, {
-      titleMaxLength: EVENT_TITLE_MAX_LENGTH,
-    });
+    const sanitized = normalizeAllDayEventDuration(
+      sanitizeEventCreateInput(input, {
+        titleMaxLength: EVENT_TITLE_MAX_LENGTH,
+      })
+    );
 
     if (this.shouldSyncProviderInvite(sanitized)) {
       return this.createEventWithOutboundInvite(sanitized);
@@ -3472,10 +3496,10 @@ class CalendarStore {
     const sanitizedPatch = sanitizeEventUpdateInput(input, {
       titleMaxLength: EVENT_TITLE_MAX_LENGTH,
     });
-    const nextEvent = {
+    const nextEvent = normalizeAllDayEventDuration({
       ...event,
       ...sanitizedPatch,
-    };
+    });
 
     if (nextEvent.endsAt <= nextEvent.startsAt) {
       throw new Error('Event end time must be after the start time.');

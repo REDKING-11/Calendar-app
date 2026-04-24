@@ -1620,6 +1620,28 @@ async function testOutboundProviderInviteFlow() {
     assert.equal(updatedEvent.title, 'Provider invite upda');
     assert.equal(updatedEvent.externalProviderLinks[0].externalEventId, 'google_event_1');
 
+    const allDayUpdatedSnapshot = await fixture.store.updateEvent({
+      id: createdEvent.id,
+      isAllDay: true,
+      startsAt: '2026-04-23T09:00:00.000Z',
+      endsAt: '2026-04-23T10:00:00.000Z',
+      inviteDeliveryMode: 'provider_invite',
+      inviteTargetAccountId: account.accountId,
+      inviteTargetProvider: 'google',
+      inviteTargetCalendarId: calendar.remoteCalendarId,
+    });
+    const allDayUpdateCall = calls.at(-1);
+    assert.equal(allDayUpdateCall.kind, 'update');
+    assert.equal(allDayUpdateCall.input.event.isAllDay, true);
+    assert.equal(
+      new Date(allDayUpdateCall.input.event.endsAt) - new Date(allDayUpdateCall.input.event.startsAt),
+      24 * 60 * 60 * 1000
+    );
+    const allDayUpdatedEvent = allDayUpdatedSnapshot.events.find(
+      (event) => event.id === createdEvent.id
+    );
+    assert.equal(allDayUpdatedEvent.endsAt, '2026-04-24T09:00:00.000Z');
+
     await fixture.store.deleteEvent(createdEvent.id);
     assert.equal(calls.some((call) => call.kind === 'delete'), true);
     const removedLinks = fixture.store.listExternalEventLinks({
@@ -2129,6 +2151,99 @@ function testOAuthClientConfigPersistence() {
   }
 }
 
+async function testOAuthRevokeRemovesLocalAccount() {
+  const fixture = createStoreFixture('calendar-store-oauth-revoke-');
+  const originalFetch = global.fetch;
+  const timestamp = new Date('2026-04-24T08:00:00.000Z').toISOString();
+  const tokenId = 'token_google_revoke';
+
+  try {
+    fixture.store.updateOAuthClientConfig({
+      google: {
+        clientId: 'google-client-id.apps.googleusercontent.com',
+        redirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
+      },
+    });
+    fixture.store.db
+      .prepare(
+        `INSERT INTO connected_accounts (
+          account_id,
+          provider,
+          subject,
+          email,
+          display_name,
+          permission_mode,
+          status,
+          can_write,
+          write_scope_granted,
+          created_at,
+          updated_at,
+          last_sync_at
+        ) VALUES (
+          'acct_google_revoke',
+          'google',
+          'subject-google',
+          'revoke@example.com',
+          'Revoke Example',
+          'write',
+          'connected',
+          1,
+          1,
+          :timestamp,
+          :timestamp,
+          NULL
+        )`
+      )
+      .run({ timestamp });
+    fixture.store.db
+      .prepare(
+        `INSERT INTO token_records (
+          token_id,
+          account_id,
+          provider,
+          scope_set,
+          access_token_cipher_text,
+          refresh_token_cipher_text,
+          expires_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          :tokenId,
+          'acct_google_revoke',
+          'google',
+          'openid profile email https://www.googleapis.com/auth/calendar.events',
+          NULL,
+          :refreshTokenCipherText,
+          NULL,
+          :timestamp,
+          :timestamp
+        )`
+      )
+      .run({
+        tokenId,
+        refreshTokenCipherText: fixture.store.cryptoService.encryptText(
+          'refresh-token',
+          `oauth-token:${tokenId}:refresh`
+        ),
+        timestamp,
+      });
+
+    global.fetch = async () => {
+      throw new Error('provider unreachable');
+    };
+
+    const revoked = await fixture.store.revokeAccount('acct_google_revoke');
+    assert.equal(revoked.result.status, 'revoked');
+    assert.equal(revoked.result.removed, true);
+    assert.equal(revoked.result.remoteRevocationSucceeded, false);
+    assert.equal(revoked.security.auth.connectedAccounts.length, 0);
+    assert.equal(fixture.store.listConnectedAccounts().length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    fixture.cleanup();
+  }
+}
+
 async function main() {
   const checks = [
     ['app_error_helpers_and_ipc_wrapper', testAppErrorHelpersAndIpcWrapper],
@@ -2152,6 +2267,7 @@ async function main() {
     ['file_picker_import_flow', testFilePickerImportFlow],
     ['local_transport_session', testLocalTransportSession],
     ['oauth_client_config_persistence', testOAuthClientConfigPersistence],
+    ['oauth_revoke_removes_local_account', testOAuthRevokeRemovesLocalAccount],
     ['reminder_service_dispatch', testReminderServiceDispatch],
   ];
 

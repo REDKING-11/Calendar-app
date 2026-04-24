@@ -107,6 +107,11 @@ export default function ConnectedAccountsPanel({
   onSaveOAuthClientConfig,
   onDisconnectAccount,
   onRevokeAccount,
+  externalCalendarsByAccount = {},
+  externalCalendarSources = [],
+  onLoadExternalCalendars,
+  onImportExternalCalendar,
+  externalCalendarBusyId = '',
   oauthBusyProvider = '',
   accountBusyId = '',
   oauthStatusMessage = '',
@@ -123,10 +128,14 @@ export default function ConnectedAccountsPanel({
   const [isSavingSetup, setIsSavingSetup] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const hasUnconfiguredProvider = supportedProviders.some((provider) => !provider.configured);
+  const savedConfigDraftSignature = useMemo(
+    () => JSON.stringify(buildConfigDraft(oauthClientConfig)),
+    [oauthClientConfig]
+  );
 
   useEffect(() => {
     setClientConfigDraft(buildConfigDraft(oauthClientConfig));
-  }, [oauthClientConfig]);
+  }, [savedConfigDraftSignature]);
 
   useEffect(() => {
     if (!isTutorialOpen) {
@@ -552,7 +561,7 @@ export default function ConnectedAccountsPanel({
             return (
               <article
                 key={account.accountId}
-                className="flex items-center justify-between gap-3.5 rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-muted)] p-3.5"
+                className="grid gap-3.5 rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-muted)] p-3.5 md:grid-cols-[minmax(0,1fr)_auto]"
               >
                 <div>
                   <p className="m-0 mb-1 text-[0.72rem] font-extrabold uppercase tracking-[0.12em] text-[var(--text-muted)]">
@@ -585,38 +594,115 @@ export default function ConnectedAccountsPanel({
                     </span>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2.5">
-                  <button
-                    type="button"
-                    className="app-button app-button--secondary"
-                    disabled={oauthBusyProvider === account.provider || isSavingSetup}
-                    onClick={() => handleConnectProvider(account.provider)}
-                  >
-                    {oauthBusyProvider === account.provider
-                      ? 'Reconnecting...'
-                      : isSavingSetup
-                        ? 'Saving setup...'
-                        : needsReconnect
-                          ? 'Reconnect'
-                          : 'Reconnect'}
-                  </button>
-                  <button
-                    type="button"
-                    className="app-button app-button--secondary"
-                    disabled={isBusy || account.status !== 'connected'}
-                    onClick={() => onDisconnectAccount?.(account.accountId)}
-                  >
-                    Disconnect
-                  </button>
-                  <button
-                    type="button"
-                    className="app-button app-danger-button"
-                    disabled={isBusy}
-                    onClick={() => onRevokeAccount?.(account.accountId)}
-                  >
-                    Revoke
-                  </button>
+                <div className="grid justify-items-end gap-2.5">
+                  <div className="flex flex-wrap justify-end gap-2.5">
+                    <button
+                      type="button"
+                      className="app-button app-button--secondary"
+                      disabled={oauthBusyProvider === account.provider || isSavingSetup}
+                      onClick={() => handleConnectProvider(account.provider)}
+                    >
+                      {oauthBusyProvider === account.provider
+                        ? 'Reconnecting...'
+                        : isSavingSetup
+                          ? 'Saving setup...'
+                          : needsReconnect
+                            ? 'Reconnect'
+                            : 'Reconnect'}
+                    </button>
+                    <button
+                      type="button"
+                      className="app-button app-button--secondary"
+                      disabled={isBusy || account.status !== 'connected'}
+                      onClick={() => onDisconnectAccount?.(account.accountId)}
+                    >
+                      Disconnect
+                    </button>
+                    <button
+                      type="button"
+                      className="app-button app-danger-button"
+                      disabled={isBusy}
+                      onClick={() => onRevokeAccount?.(account.accountId)}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                  {account.status === 'connected' ? (
+                    <button
+                      type="button"
+                      className="app-button app-button--secondary"
+                      disabled={externalCalendarsByAccount[account.accountId]?.status === 'loading'}
+                      onClick={() => onLoadExternalCalendars?.(account.accountId, { force: true })}
+                    >
+                      {externalCalendarsByAccount[account.accountId]?.status === 'loading'
+                        ? 'Loading calendars...'
+                        : 'Show calendars to import'}
+                    </button>
+                  ) : null}
                 </div>
+                {account.status === 'connected' ? (
+                  <div className="col-span-full mt-2 grid gap-2 border-t border-[var(--border-color)] pt-3">
+                    {externalCalendarsByAccount[account.accountId]?.error ? (
+                      <p className="notification-helper-copy m-0">
+                        {externalCalendarsByAccount[account.accountId].error}
+                      </p>
+                    ) : null}
+                    {(externalCalendarsByAccount[account.accountId]?.items || []).length > 0 ? (
+                      <div className="grid gap-2">
+                        {(externalCalendarsByAccount[account.accountId]?.items || []).map(
+                          (calendar) => {
+                            const importedSource = externalCalendarSources.find(
+                              (source) =>
+                                source.accountId === account.accountId &&
+                                source.provider === calendar.provider &&
+                                source.remoteCalendarId === calendar.remoteCalendarId
+                            );
+                            const calendarBusyId = `${account.accountId}:${calendar.remoteCalendarId}`;
+                            const isCalendarBusy = externalCalendarBusyId === calendarBusyId;
+                            return (
+                              <div
+                                key={calendar.remoteCalendarId}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--surface-secondary)] px-3 py-2"
+                              >
+                                <div>
+                                  <p className="m-0 text-[0.9rem] font-extrabold text-[var(--text-primary)]">
+                                    {calendar.displayName || 'Calendar'}
+                                  </p>
+                                  <p className="notification-helper-copy m-0">
+                                    {importedSource ? 'Already imported' : 'Ready to import'}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="app-button app-button--secondary"
+                                  disabled={Boolean(importedSource) || isCalendarBusy}
+                                  onClick={() =>
+                                    onImportExternalCalendar?.({
+                                      accountId: account.accountId,
+                                      remoteCalendarId: calendar.remoteCalendarId,
+                                    })
+                                  }
+                                >
+                                  {isCalendarBusy
+                                    ? 'Importing...'
+                                    : importedSource
+                                      ? 'Imported'
+                                      : 'Import'}
+                                </button>
+                              </div>
+                            );
+                          }
+                        )}
+                      </div>
+                    ) : null}
+                    {externalCalendarsByAccount[account.accountId]?.status === 'ready' &&
+                    (externalCalendarsByAccount[account.accountId]?.items || []).length === 0 ? (
+                      <p className="notification-helper-copy m-0">
+                        No calendars were returned for this account.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </article>
             );
           })}

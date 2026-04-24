@@ -1787,6 +1787,45 @@ class OAuthService {
     };
   }
 
+  removeLocalAccount(accountId) {
+    const account = this.db
+      .prepare(
+        `SELECT account_id AS accountId, provider
+         FROM connected_accounts
+         WHERE account_id = :accountId`
+      )
+      .get({ accountId });
+
+    if (!account) {
+      throw new Error('Connected account not found.');
+    }
+
+    this.db.exec('BEGIN');
+
+    try {
+      this.db.prepare('DELETE FROM token_records WHERE account_id = :accountId').run({ accountId });
+      this.db.prepare('DELETE FROM connected_accounts WHERE account_id = :accountId').run({
+        accountId,
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
+    this.onAudit?.('oauth_account_removed', {
+      targetType: 'account',
+      targetId: accountId,
+      details: { provider: account.provider },
+    });
+
+    return {
+      accountId,
+      status: 'revoked',
+      removed: true,
+    };
+  }
+
   async revokeAccount(accountId) {
     const account = this.db
       .prepare(
@@ -1821,19 +1860,27 @@ class OAuthService {
         )
       : null;
 
+    let remoteRevocationError = '';
     if (config.revokeUrl && (refreshToken || accessToken)) {
-      await fetch(config.revokeUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          token: refreshToken || accessToken,
-        }),
-      });
+      try {
+        const response = await fetch(config.revokeUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            token: refreshToken || accessToken,
+          }),
+        });
+        if (!response.ok) {
+          remoteRevocationError = `Remote revocation failed with HTTP ${response.status}.`;
+        }
+      } catch (error) {
+        remoteRevocationError = error?.message || 'Remote revocation failed.';
+      }
     }
 
-    const disconnected = this.disconnectAccount(accountId);
+    const removed = this.removeLocalAccount(accountId);
 
     this.onAudit?.('oauth_account_revoked', {
       targetType: 'account',
@@ -1841,10 +1888,17 @@ class OAuthService {
       details: {
         provider: account.provider,
         remoteRevocationAttempted: Boolean(config.revokeUrl),
+        remoteRevocationSucceeded: !remoteRevocationError,
+        remoteRevocationError,
       },
     });
 
-    return disconnected;
+    return {
+      ...removed,
+      remoteRevocationAttempted: Boolean(config.revokeUrl),
+      remoteRevocationSucceeded: !remoteRevocationError,
+      remoteRevocationError,
+    };
   }
 
   close() {
