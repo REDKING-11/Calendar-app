@@ -160,9 +160,11 @@ export default function SettingsWindow({
   hostedBusyAction,
   hostedStatusMessage,
   connectedAccounts = [],
+  externalCalendarsByAccount = {},
+  externalCalendarSources = [],
+  externalCalendarBusyId = '',
   providers = [],
   oauthClientConfig = {},
-  externalCalendarsByAccount = {},
   onConnectProvider,
   onSaveOAuthClientConfig,
   onLoadExternalCalendars,
@@ -437,9 +439,11 @@ export default function SettingsWindow({
         >
           <ConnectedAccountsPanel
             connectedAccounts={connectedAccounts}
+            externalCalendarsByAccount={externalCalendarsByAccount}
+            externalCalendarSources={externalCalendarSources}
+            externalCalendarBusyId={externalCalendarBusyId}
             providers={providers}
             oauthClientConfig={oauthClientConfig}
-            externalCalendarsByAccount={externalCalendarsByAccount}
             onConnectProvider={onConnectProvider}
             onSaveOAuthClientConfig={onSaveOAuthClientConfig}
             onLoadExternalCalendars={onLoadExternalCalendars}

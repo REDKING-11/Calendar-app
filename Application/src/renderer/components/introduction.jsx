@@ -40,9 +40,11 @@ export default function Introduction({
   preloadState = { status: 'idle', countryCode: '' },
   variant = 'panel',
   connectedAccounts = [],
+  externalCalendarsByAccount = {},
+  externalCalendarSources = [],
+  externalCalendarBusyId = '',
   providers = [],
   oauthClientConfig = {},
-  externalCalendarsByAccount = {},
   onConnectProvider,
   onSaveOAuthClientConfig,
   onLoadExternalCalendars,
@@ -389,9 +391,11 @@ export default function Introduction({
           <div className={isOnboarding ? 'xl:col-span-3 md:col-span-2' : 'md:col-span-4'}>
             <ConnectedAccountsPanel
               connectedAccounts={connectedAccounts}
+              externalCalendarsByAccount={externalCalendarsByAccount}
+              externalCalendarSources={externalCalendarSources}
+              externalCalendarBusyId={externalCalendarBusyId}
               providers={providers}
               oauthClientConfig={oauthClientConfig}
-              externalCalendarsByAccount={externalCalendarsByAccount}
               onConnectProvider={onConnectProvider}
               onSaveOAuthClientConfig={onSaveOAuthClientConfig}
               onLoadExternalCalendars={onLoadExternalCalendars}

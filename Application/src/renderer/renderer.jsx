@@ -410,6 +410,7 @@ function App() {
   const [oauthStatusMessage, setOAuthStatusMessage] = useState('');
   const [accountBusyId, setAccountBusyId] = useState('');
   const [externalCalendarsByAccount, setExternalCalendarsByAccount] = useState({});
+  const [externalCalendarBusyId, setExternalCalendarBusyId] = useState('');
   const [composerStatusMessage, setComposerStatusMessage] = useState('');
   const [pendingInviteConfirmation, setPendingInviteConfirmation] = useState(null);
   const snapshotRef = useRef(null);
@@ -527,6 +528,7 @@ function App() {
   }, [preferences.defaultView]);
 
   const allEvents = snapshot?.events || [];
+  const externalCalendarSources = snapshot?.externalCalendarSources || [];
   const connectedAccounts = snapshot?.security?.auth?.connectedAccounts || [];
   const notificationProviders = snapshot?.security?.auth?.providers || [];
   const oauthClientConfig = snapshot?.security?.auth?.clientConfig || {};
@@ -1222,6 +1224,9 @@ function App() {
       throw new Error('Choose a connected account and calendar to import.');
     }
 
+    const busyId = `${accountId}:${remoteCalendarId}`;
+    setExternalCalendarBusyId(busyId);
+    setOAuthStatusMessage('');
     try {
       const result = await window.calendarApp.importExternalCalendar({
         accountId,
@@ -1230,11 +1235,23 @@ function App() {
       if (result?.snapshot) {
         snapshotRef.current = result.snapshot;
         setSnapshot(result.snapshot);
+      } else {
+        await refreshSnapshot();
       }
+      const importedCount = Number(result?.createdCount || 0) + Number(result?.updatedCount || 0);
+      setOAuthStatusMessage(
+        `Imported ${importedCount} event${importedCount === 1 ? '' : 's'} from ${
+          result?.source?.displayName || 'calendar'
+        }.`
+      );
+      await handleLoadExternalCalendars(accountId, { force: true });
       return result;
     } catch (error) {
       rememberAppError(error, 'external-calendar-import');
+      setOAuthStatusMessage(error?.message || 'Calendar could not be imported.');
       throw error;
+    } finally {
+      setExternalCalendarBusyId('');
     }
   };
 
@@ -1698,9 +1715,11 @@ function App() {
         onSavePreferences={importHolidayPreferences}
         onSkip={handleSkipSetup}
         connectedAccounts={connectedAccounts}
+        externalCalendarsByAccount={externalCalendarsByAccount}
+        externalCalendarSources={externalCalendarSources}
+        externalCalendarBusyId={externalCalendarBusyId}
         providers={notificationProviders}
         oauthClientConfig={oauthClientConfig}
-        externalCalendarsByAccount={externalCalendarsByAccount}
         onConnectProvider={handleStartOAuthConnect}
         onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
         onLoadExternalCalendars={handleLoadExternalCalendars}
@@ -1798,9 +1817,11 @@ function App() {
           hostedBusyAction={hostedBusyAction}
           hostedStatusMessage={hostedStatusMessage}
           connectedAccounts={connectedAccounts}
+          externalCalendarsByAccount={externalCalendarsByAccount}
+          externalCalendarSources={externalCalendarSources}
+          externalCalendarBusyId={externalCalendarBusyId}
           providers={notificationProviders}
           oauthClientConfig={oauthClientConfig}
-          externalCalendarsByAccount={externalCalendarsByAccount}
           onConnectProvider={handleStartOAuthConnect}
           onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
           onLoadExternalCalendars={handleLoadExternalCalendars}
@@ -1940,6 +1961,8 @@ function App() {
               providers={notificationProviders}
               oauthClientConfig={oauthClientConfig}
               externalCalendarsByAccount={externalCalendarsByAccount}
+              externalCalendarSources={externalCalendarSources}
+              externalCalendarBusyId={externalCalendarBusyId}
               onConnectProvider={handleStartOAuthConnect}
               onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
               onLoadExternalCalendars={handleLoadExternalCalendars}

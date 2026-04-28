@@ -142,6 +142,8 @@ export default function ConnectedAccountsPanel({
   providers = [],
   oauthClientConfig = {},
   externalCalendarsByAccount = {},
+  externalCalendarSources = [],
+  externalCalendarBusyId = '',
   onConnectProvider,
   onSaveOAuthClientConfig,
   onLoadExternalCalendars,
@@ -165,10 +167,14 @@ export default function ConnectedAccountsPanel({
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [calendarImportFeedback, setCalendarImportFeedback] = useState({});
   const hasUnconfiguredProvider = supportedProviders.some((provider) => !provider.configured);
+  const savedConfigDraftSignature = useMemo(
+    () => JSON.stringify(buildConfigDraft(oauthClientConfig)),
+    [oauthClientConfig]
+  );
 
   useEffect(() => {
     setClientConfigDraft(buildConfigDraft(oauthClientConfig));
-  }, [oauthClientConfig]);
+  }, [savedConfigDraftSignature]);
 
   useEffect(() => {
     if (!isTutorialOpen) {
@@ -707,7 +713,6 @@ export default function ConnectedAccountsPanel({
                     </button>
                   </div>
                 </div>
-
                 {canImportProviderCalendars ? (
                   <section className="grid gap-2 border-t border-[var(--border-color)] pt-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -756,12 +761,21 @@ export default function ConnectedAccountsPanel({
                     {accountCalendars.length > 0 ? (
                       <div className="grid gap-1.5">
                         {accountCalendars.map((calendar) => {
+                          const importedSource = externalCalendarSources.find(
+                            (source) =>
+                              source.accountId === account.accountId &&
+                              source.provider === (calendar.provider || account.provider) &&
+                              source.remoteCalendarId === calendar.remoteCalendarId
+                          );
                           const feedbackKey = getCalendarImportKey(
                             account.accountId,
                             calendar.remoteCalendarId
                           );
+                          const calendarBusyId = `${account.accountId}:${calendar.remoteCalendarId}`;
                           const importFeedback = calendarImportFeedback[feedbackKey];
-                          const isImporting = importFeedback?.status === 'loading';
+                          const isImporting =
+                            importFeedback?.status === 'loading' ||
+                            externalCalendarBusyId === calendarBusyId;
 
                           return (
                             <div
@@ -774,6 +788,7 @@ export default function ConnectedAccountsPanel({
                                 </p>
                                 <p className="m-0 text-[0.78rem] text-[var(--text-secondary)]">
                                   {getCalendarAccessLabel(calendar)}
+                                  {importedSource ? ' - Already imported' : ''}
                                 </p>
                               </div>
                               <button
@@ -788,7 +803,11 @@ export default function ConnectedAccountsPanel({
                                   handleImportProviderCalendar(account.accountId, calendar)
                                 }
                               >
-                                {isImporting ? 'Importing...' : 'Import'}
+                                {isImporting
+                                  ? 'Importing...'
+                                  : importedSource
+                                    ? 'Refresh import'
+                                    : 'Import'}
                               </button>
                               {importFeedback?.message ? (
                                 <p
