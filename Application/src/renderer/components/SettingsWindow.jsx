@@ -162,8 +162,11 @@ export default function SettingsWindow({
   connectedAccounts = [],
   providers = [],
   oauthClientConfig = {},
+  externalCalendarsByAccount = {},
   onConnectProvider,
   onSaveOAuthClientConfig,
+  onLoadExternalCalendars,
+  onImportExternalCalendar,
   onDisconnectAccount,
   onRevokeAccount,
   oauthBusyProvider = '',
@@ -436,8 +439,11 @@ export default function SettingsWindow({
             connectedAccounts={connectedAccounts}
             providers={providers}
             oauthClientConfig={oauthClientConfig}
+            externalCalendarsByAccount={externalCalendarsByAccount}
             onConnectProvider={onConnectProvider}
             onSaveOAuthClientConfig={onSaveOAuthClientConfig}
+            onLoadExternalCalendars={onLoadExternalCalendars}
+            onImportExternalCalendar={onImportExternalCalendar}
             onDisconnectAccount={onDisconnectAccount}
             onRevokeAccount={onRevokeAccount}
             oauthBusyProvider={oauthBusyProvider}

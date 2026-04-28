@@ -12,8 +12,10 @@ export const EVENT_SCOPE_OPTIONS = [
 export const DURATION_PRESET_OPTIONS = [
   { id: 30, label: '30m' },
   { id: 60, label: '1h' },
+  { id: 90, label: '1h 30m' },
   { id: 120, label: '2h' },
 ];
+export const ALL_DAY_DURATION_MINUTES = 24 * 60;
 export const REMINDER_UNIT_OPTIONS = [
   { id: 'minutes', label: 'Minutes' },
   { id: 'hours', label: 'Hours' },
@@ -386,6 +388,40 @@ function coerceMinutes(value, fallback = 60) {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
 }
 
+export function normalizeTimedDurationMinutes(value, fallback = 60) {
+  const fallbackDuration = coerceMinutes(fallback, 60);
+  const numeric = coerceMinutes(value, 0);
+  if (numeric > 0 && numeric < ALL_DAY_DURATION_MINUTES) {
+    return numeric;
+  }
+
+  if (fallbackDuration > 0 && fallbackDuration < ALL_DAY_DURATION_MINUTES) {
+    return fallbackDuration;
+  }
+
+  return 60;
+}
+
+export function formatDurationLabel(minutes) {
+  const normalizedMinutes = Math.round(coerceMinutes(minutes, 0));
+  if (normalizedMinutes <= 0) {
+    return '0m';
+  }
+
+  const hours = Math.floor(normalizedMinutes / 60);
+  const remainingMinutes = normalizedMinutes % 60;
+  const parts = [];
+
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (remainingMinutes > 0) {
+    parts.push(`${remainingMinutes}m`);
+  }
+
+  return parts.join(' ') || `${normalizedMinutes}m`;
+}
+
 export function addMinutesToDate(date, minutes) {
   const nextDate = new Date(date);
   nextDate.setMinutes(nextDate.getMinutes() + minutes);
@@ -407,21 +443,34 @@ export function getTimeDifferenceMinutes(startTime, endTime) {
 }
 
 export function getDraftDurationMinutes(draftEvent, fallback = 60) {
+  if (draftEvent?.isAllDay) {
+    return ALL_DAY_DURATION_MINUTES;
+  }
+
+  const timeDifference = getTimeDifferenceMinutes(draftEvent?.time, draftEvent?.endTime);
+  if (timeDifference > 0) {
+    return timeDifference;
+  }
+
   const draftDuration = coerceMinutes(draftEvent?.durationMinutes, 0);
   if (draftDuration > 0) {
     return draftDuration;
   }
 
-  const timeDifference = getTimeDifferenceMinutes(draftEvent?.time, draftEvent?.endTime);
-  return timeDifference > 0 ? timeDifference : fallback;
+  return fallback;
 }
 
 export function getDraftStartDate(draftEvent) {
-  return new Date(`${draftEvent.date}T${draftEvent.time}:00`);
+  const time = draftEvent?.isAllDay ? '00:00' : draftEvent.time;
+  return new Date(`${draftEvent.date}T${time}:00`);
 }
 
 export function getDraftEndDate(draftEvent, fallbackDuration = 60) {
   const startsAt = getDraftStartDate(draftEvent);
+  if (draftEvent?.isAllDay) {
+    return addMinutesToDate(startsAt, ALL_DAY_DURATION_MINUTES);
+  }
+
   const endsAt = new Date(`${draftEvent.date}T${draftEvent.endTime}:00`);
   if (Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) {
     return addMinutesToDate(startsAt, getDraftDurationMinutes(draftEvent, fallbackDuration));
@@ -434,8 +483,56 @@ export function setDraftDuration(draftEvent, durationMinutes) {
   const nextDuration = coerceMinutes(durationMinutes, 60);
   return {
     ...draftEvent,
+    isAllDay: false,
     durationMinutes: nextDuration,
     endTime: addMinutesToTime(draftEvent.time, nextDuration),
+  };
+}
+
+export function setDraftAllDay(draftEvent) {
+  return {
+    ...draftEvent,
+    isAllDay: true,
+    time: '00:00',
+    endTime: '00:00',
+    durationMinutes: ALL_DAY_DURATION_MINUTES,
+  };
+}
+
+export function setDraftStartTime(draftEvent, timeValue, fallbackDuration = 60) {
+  const durationMinutes = draftEvent?.isAllDay
+    ? coerceMinutes(fallbackDuration, 60)
+    : getDraftDurationMinutes(draftEvent, fallbackDuration);
+
+  return {
+    ...draftEvent,
+    isAllDay: false,
+    time: timeValue,
+    durationMinutes,
+    endTime: addMinutesToTime(timeValue, durationMinutes),
+  };
+}
+
+export function setDraftEndTime(draftEvent, endTimeValue, fallbackDuration = 60) {
+  const nextDuration = getTimeDifferenceMinutes(draftEvent?.time, endTimeValue);
+  if (nextDuration > 0) {
+    return {
+      ...draftEvent,
+      isAllDay: false,
+      endTime: endTimeValue,
+      durationMinutes: nextDuration,
+    };
+  }
+
+  const durationMinutes = draftEvent?.isAllDay
+    ? coerceMinutes(fallbackDuration, 60)
+    : getDraftDurationMinutes(draftEvent, fallbackDuration);
+
+  return {
+    ...draftEvent,
+    isAllDay: false,
+    durationMinutes,
+    endTime: addMinutesToTime(draftEvent?.time || '09:00', durationMinutes),
   };
 }
 
@@ -449,10 +546,17 @@ export function isDraftEventValid(draftEvent) {
 }
 
 export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60, defaults = {}) {
-  const defaultDuration = coerceMinutes(durationMinutes, 60);
+  const isAllDay = Boolean(defaults.isAllDay);
+  const defaultDuration = isAllDay
+    ? ALL_DAY_DURATION_MINUTES
+    : coerceMinutes(durationMinutes, 60);
   const defaultTime =
-    date.getHours() === 0 && date.getMinutes() === 0 ? '09:00' : formatTimeForInput(date);
-  const endTime = addMinutesToTime(defaultTime, defaultDuration);
+    isAllDay
+      ? '00:00'
+      : date.getHours() === 0 && date.getMinutes() === 0
+        ? '09:00'
+        : formatTimeForInput(date);
+  const endTime = isAllDay ? '00:00' : addMinutesToTime(defaultTime, defaultDuration);
 
   const notifications = normalizeNotificationDrafts(
     defaults.notifications,
@@ -476,6 +580,7 @@ export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60, d
     time: defaultTime,
     endTime,
     durationMinutes: defaultDuration,
+    isAllDay,
     reminderMinutesBeforeStart: notifications[0]?.reminderMinutesBeforeStart ?? null,
     desktopNotificationEnabled: Boolean(notifications[0]?.desktopNotificationEnabled),
     emailNotificationEnabled: Boolean(notifications[0]?.emailNotificationEnabled),
@@ -507,6 +612,10 @@ export function createEmptyDraftEvent(date = new Date(), durationMinutes = 60, d
 export function createDraftEventFromEvent(event) {
   const startsAt = new Date(event.startsAt);
   const endsAt = new Date(event.endsAt);
+  const isAllDay = Boolean(event.isAllDay);
+  const durationMinutes = isAllDay
+    ? ALL_DAY_DURATION_MINUTES
+    : Math.max(Math.round((endsAt.getTime() - startsAt.getTime()) / 60000), 30);
   const people = Array.isArray(event.people) ? event.people : [];
   const storedInviteRecipients = normalizeNotificationRecipients(event.inviteRecipients || []);
   const fallbackGuestEmails = extractInviteeEmails(people);
@@ -521,9 +630,10 @@ export function createDraftEventFromEvent(event) {
     inviteRecipientsInput: inviteRecipients.join(', '),
     type: normalizeEventType(event.type || 'meeting'),
     date: formatDateForInput(startsAt),
-    time: formatTimeForInput(startsAt),
-    endTime: formatTimeForInput(endsAt),
-    durationMinutes: Math.max(getTimeDifferenceMinutes(formatTimeForInput(startsAt), formatTimeForInput(endsAt)), 30),
+    time: isAllDay ? '00:00' : formatTimeForInput(startsAt),
+    endTime: isAllDay ? '00:00' : formatTimeForInput(endsAt),
+    durationMinutes,
+    isAllDay,
     reminderMinutesBeforeStart: normalizeReminderMinutesBeforeStart(
       event.reminderMinutesBeforeStart
     ),
@@ -585,6 +695,7 @@ export function buildEventPayloadFromDraft(draftEvent, fallbackDuration = 60) {
     groupName: sanitizeInlineUserText(draftEvent.groupName, 120),
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
+    isAllDay: Boolean(draftEvent.isAllDay),
     inviteRecipients: extractInviteeEmails(draftEvent.inviteRecipientsInput),
     reminderMinutesBeforeStart: primaryNotification?.reminderMinutesBeforeStart ?? null,
     desktopNotificationEnabled: Boolean(primaryNotification?.desktopNotificationEnabled),

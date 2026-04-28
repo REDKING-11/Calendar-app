@@ -9,6 +9,7 @@ export default function EventComposerDrawer({
   onClose,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   onFindFreeSlot,
   conflictSummary,
   knownNotificationEmails,
@@ -78,6 +79,7 @@ export default function EventComposerDrawer({
               draftEvent={draftEvent}
               onFieldChange={onFieldChange}
               onSelectDuration={onSelectDuration}
+              onSelectAllDay={onSelectAllDay}
               conflictSummary={conflictSummary}
               onFindFreeSlot={onFindFreeSlot}
               titleAutoFocus={isOpen}

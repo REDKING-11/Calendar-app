@@ -31,7 +31,7 @@ function getEventLayout(event) {
   const startsAt = new Date(event.startsAt);
   const endsAt = new Date(event.endsAt);
   const startMinutes = startsAt.getHours() * 60 + startsAt.getMinutes();
-  const endMinutes = endsAt.getHours() * 60 + endsAt.getMinutes();
+  const endMinutes = event.isAllDay ? 24 * 60 : endsAt.getHours() * 60 + endsAt.getMinutes();
   const durationMinutes = Math.max(endMinutes - startMinutes, 30);
 
   return {

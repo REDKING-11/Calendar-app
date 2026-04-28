@@ -153,7 +153,7 @@ export function buildMonthTiles(
       date,
       dayNumber: date.getDate(),
       inCurrentMonth: date.getMonth() === monthStart.getMonth(),
-      showMonthLabel: date.getDate() === 1,
+      showMonthLabel: date.getDate() === 1 || (index === 0 && date.getMonth() !== monthStart.getMonth()),
       isToday: isSameDay(date, new Date()),
       events: (
         eventDateIndex?.byDay?.get(getDateKey(date)) ||

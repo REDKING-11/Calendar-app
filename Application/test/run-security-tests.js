@@ -58,6 +58,9 @@ const clickIntent = loadTranspiledModule(
 const composerRouting = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'composerRouting.js')
 );
+const calendarHelpers = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'components', 'calendar-helpers.js')
+);
 const keyboardNavigation = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'keyboardNavigation.js')
 );
@@ -360,6 +363,31 @@ function testComposerRoutingHelpers() {
   );
 }
 
+function testMonthTileMonthLabels() {
+  const tiles = calendarHelpers.buildMonthTiles(
+    new Date(2026, 3, 1, 12, 0, 0, 0),
+    [],
+    'Europe/Helsinki',
+    'monday'
+  );
+
+  assert.equal(tiles[0].date.getMonth(), 2);
+  assert.equal(tiles[0].dayNumber, 30);
+  assert.equal(tiles[0].showMonthLabel, true);
+  assert.equal(tiles[1].dayNumber, 31);
+  assert.equal(tiles[1].showMonthLabel, false);
+
+  const aprilFirst = tiles.find(
+    (tile) => tile.date.getFullYear() === 2026 && tile.date.getMonth() === 3 && tile.dayNumber === 1
+  );
+  const mayFirst = tiles.find(
+    (tile) => tile.date.getFullYear() === 2026 && tile.date.getMonth() === 4 && tile.dayNumber === 1
+  );
+
+  assert.equal(aprilFirst?.showMonthLabel, true);
+  assert.equal(mayFirst?.showMonthLabel, true);
+}
+
 function createMockFocusableElement({
   tagName = 'BUTTON',
   disabled = false,
@@ -615,6 +643,105 @@ function testEventScopeHelpers() {
     visibility: 'private',
   });
   assert.equal(hydratedPrivatePersonalDraft.scope, 'internal');
+}
+
+function testFlexibleDurationAndAllDayDrafts() {
+  const baseDraft = eventDraft.createEmptyDraftEvent(
+    new Date(2026, 3, 16, 10, 0, 0, 0),
+    30,
+    { scope: 'internal' }
+  );
+
+  assert.equal(
+    eventDraft.DURATION_PRESET_OPTIONS.some((option) => option.id === 90),
+    true
+  );
+  assert.equal(baseDraft.time, '10:00');
+  assert.equal(baseDraft.endTime, '10:30');
+  assert.equal(baseDraft.isAllDay, false);
+
+  const twoHourDraft = eventDraft.setDraftDuration(baseDraft, 120);
+  assert.equal(twoHourDraft.time, '10:00');
+  assert.equal(twoHourDraft.endTime, '12:00');
+  assert.equal(twoHourDraft.durationMinutes, 120);
+  assert.equal(twoHourDraft.isAllDay, false);
+
+  const ninetyMinuteDraft = eventDraft.setDraftDuration(baseDraft, 90);
+  assert.equal(ninetyMinuteDraft.endTime, '11:30');
+  assert.equal(eventDraft.formatDurationLabel(90), '1h 30m');
+
+  const customDraft = eventDraft.setDraftEndTime(baseDraft, '13:24', 60);
+  assert.equal(customDraft.endTime, '13:24');
+  assert.equal(customDraft.durationMinutes, 204);
+  assert.equal(eventDraft.getDraftDurationMinutes(customDraft, 60), 204);
+  assert.equal(eventDraft.formatDurationLabel(customDraft.durationMinutes), '3h 24m');
+  assert.equal(eventDraft.normalizeTimedDurationMinutes(customDraft.durationMinutes, 60), 204);
+  assert.equal(eventDraft.normalizeTimedDurationMinutes(24 * 60, 60), 60);
+  assert.equal(eventDraft.normalizeTimedDurationMinutes(24 * 60, 24 * 60), 60);
+
+  const customPayload = eventDraft.buildEventPayloadFromDraft(
+    {
+      ...customDraft,
+      title: 'Custom time',
+    },
+    60
+  );
+  assert.equal(customPayload.isAllDay, false);
+  assert.equal(
+    (new Date(customPayload.endsAt).getTime() - new Date(customPayload.startsAt).getTime()) /
+      60000,
+    204
+  );
+
+  const invalidEndDraft = eventDraft.setDraftEndTime(customDraft, '09:00', 60);
+  assert.equal(invalidEndDraft.endTime, '13:24');
+  assert.equal(invalidEndDraft.durationMinutes, 204);
+  assert.equal(invalidEndDraft.isAllDay, false);
+
+  const allDayDraft = eventDraft.setDraftAllDay({
+    ...baseDraft,
+    title: 'All day',
+  });
+  assert.equal(allDayDraft.time, '00:00');
+  assert.equal(allDayDraft.endTime, '00:00');
+  assert.equal(allDayDraft.durationMinutes, 24 * 60);
+  assert.equal(allDayDraft.isAllDay, true);
+  assert.equal(eventDraft.getDraftDurationMinutes(allDayDraft, 60), 24 * 60);
+
+  const allDayPayload = eventDraft.buildEventPayloadFromDraft(allDayDraft, 60);
+  assert.equal(allDayPayload.isAllDay, true);
+  assert.equal(
+    (new Date(allDayPayload.endsAt).getTime() - new Date(allDayPayload.startsAt).getTime()) /
+      60000,
+    24 * 60
+  );
+
+  const timedDraftFromAllDay = eventDraft.setDraftStartTime(allDayDraft, '10:00', 30);
+  assert.equal(timedDraftFromAllDay.isAllDay, false);
+  assert.equal(timedDraftFromAllDay.time, '10:00');
+  assert.equal(timedDraftFromAllDay.endTime, '10:30');
+  assert.equal(timedDraftFromAllDay.durationMinutes, 30);
+
+  const hydratedAllDayDraft = eventDraft.createDraftEventFromEvent({
+    id: 'event_all_day',
+    title: 'Hydrated all day',
+    description: '',
+    location: '',
+    people: [],
+    type: 'meeting',
+    startsAt: new Date(2026, 3, 16, 0, 0, 0, 0).toISOString(),
+    endsAt: new Date(2026, 3, 17, 0, 0, 0, 0).toISOString(),
+    isAllDay: true,
+    color: '#4f9d69',
+    tags: [],
+    externalProviderLinks: [],
+    syncPolicy: 'internal_only',
+    visibility: 'private',
+  });
+  assert.equal(hydratedAllDayDraft.isAllDay, true);
+  assert.equal(hydratedAllDayDraft.time, '00:00');
+  assert.equal(hydratedAllDayDraft.endTime, '00:00');
+  assert.equal(hydratedAllDayDraft.durationMinutes, 24 * 60);
 }
 
 function testReminderHelpersAndValidation() {
@@ -2135,8 +2262,10 @@ async function main() {
     ['developer_mode_preference_and_debug_redaction', testDeveloperModePreferenceAndDebugRedaction],
     ['click_intent_helpers', testClickIntentHelpers],
     ['composer_routing_helpers', testComposerRoutingHelpers],
+    ['month_tile_month_labels', testMonthTileMonthLabels],
     ['keyboard_navigation_helpers', testKeyboardNavigationHelpers],
     ['event_scope_helpers', testEventScopeHelpers],
+    ['flexible_duration_and_all_day_drafts', testFlexibleDurationAndAllDayDrafts],
     ['reminder_helpers_and_validation', testReminderHelpersAndValidation],
     ['encrypted_at_rest', testEncryptedAtRest],
     ['legacy_migration', testLegacyMigration],

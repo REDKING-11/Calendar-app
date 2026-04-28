@@ -1,0 +1,297 @@
+Calendar App - Implementation Change Notes
+Date: 2026-04-28
+Format: plain text documentation summary
+
+This document records the main changes made during the April 28 chat.
+It is written as a project note rather than a Git diff. The work focused on
+provider calendar imports, more flexible event timing, quick creator fixes, and
+a small month-grid labeling improvement.
+
+
+1. Provider calendar import controls
+------------------------------------
+
+The first question in the chat was whether the connected-account article on the
+connection/settings page should contain calendar import controls for accounts
+such as Google or Outlook.
+
+The answer was yes, so the connected account cards were extended with a new
+Calendars area.
+
+Behavior added:
+- Connected Google and Outlook account cards now show calendar import controls.
+- Disconnected accounts do not offer calendar import actions.
+- Each connected account can load its remote calendars on demand.
+- The user explicitly chooses one remote calendar and presses Import.
+- Imports are never automatic.
+- Local .ics and .json file import remains separate in Settings.
+
+The existing IPC/API surface was reused:
+- calendar:listExternalCalendars
+- calendar:importExternalCalendar
+
+No main-process or preload IPC additions were needed.
+
+Renderer state and handlers added:
+- externalCalendarsByAccount
+- handleLoadExternalCalendars(accountId, { force })
+- handleImportExternalCalendar({ accountId, remoteCalendarId })
+
+Props were threaded through:
+- Application/src/renderer/renderer.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+
+ConnectedAccountsPanel behavior added:
+- load/refresh button per connected account
+- loading state
+- error state
+- empty state
+- per-calendar Import button
+- per-account import success/error messages
+- import result summary for created, updated, and removed events
+
+After a provider calendar import succeeds, the returned snapshot is applied to
+the app immediately so imported events appear without restarting or manually
+refreshing.
+
+
+2. Flexible event duration and all-day events
+---------------------------------------------
+
+The next major request was to make duration presets behave only as quick buttons
+instead of hard limits.
+
+The timing model was updated so users can:
+- press 30m, 1h, 1h 30m, or 2h as quick duration buttons
+- type custom same-day end times such as 10:00-13:24
+- scroll or arrow-adjust time inputs in 15 minute steps
+- create a one-day all-day event with a dedicated All day chip
+
+Duration preset behavior:
+- 30m keeps the start time and sets the end time 30 minutes later.
+- 1h keeps the start time and sets the end time one hour later.
+- 1h 30m keeps the start time and sets the end time 90 minutes later.
+- 2h keeps the start time and sets the end time two hours later.
+
+Example behavior:
+- 10:00-10:30, press 2h, becomes 10:00-12:00.
+- 10:00-10:30, type end time 13:24, saves exactly 10:00-13:24.
+- Press All day, saves as the selected date from 00:00 to the next day 00:00.
+
+Draft helpers added or changed in Application/src/renderer/eventDraft.js:
+- ALL_DAY_DURATION_MINUTES
+- normalizeTimedDurationMinutes
+- formatDurationLabel
+- setDraftAllDay
+- setDraftStartTime
+- setDraftEndTime
+- updated setDraftDuration
+- updated getDraftDurationMinutes
+- updated getDraftStartDate
+- updated getDraftEndDate
+- updated createEmptyDraftEvent
+- updated createDraftEventFromEvent
+- updated buildEventPayloadFromDraft
+
+All-day draft behavior:
+- isAllDay is set to true.
+- time is set to 00:00.
+- endTime is set to 00:00.
+- durationMinutes is set to 1440.
+- buildEventPayloadFromDraft now includes isAllDay.
+- all-day payloads end on the next day.
+- editing a normal time field clears all-day mode.
+- hydrating an existing all-day event keeps all-day state.
+
+Visible duration labels were improved:
+- custom 204 minute events display as 3h 24m.
+- 90 minutes displays as 1h 30m.
+- all-day events display as All day.
+
+The full composer and quick composer both received:
+- 30m chip
+- 1h chip
+- 1h 30m chip
+- 2h chip
+- All day chip
+- readable duration label
+
+Main files involved:
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/renderer.jsx
+- Application/src/renderer/components/EventComposerFields.jsx
+- Application/src/renderer/components/EventComposerDrawer.jsx
+- Application/src/renderer/components/QuickEventPopover.jsx
+
+
+3. All-day event presentation in calendar views
+-----------------------------------------------
+
+All-day events also needed to render sensibly after they were created.
+
+Presentation changes:
+- eventPresentation now returns All day for all-day event time labels.
+- Day view treats all-day events as running through the full visible day.
+- Week view treats all-day events as running through the full visible day.
+
+Main files involved:
+- Application/src/renderer/components/eventPresentation.js
+- Application/src/renderer/components/Views/DayView.jsx
+- Application/src/renderer/components/Views/WeekView.jsx
+
+
+4. Quick creator timing fix
+---------------------------
+
+After the flexible duration work, the quick creator needed extra attention
+because the same timing behavior did not feel reliable there.
+
+The quick creator was fixed so its compact date and time fields update the draft
+more eagerly.
+
+Changes made:
+- complete typed time values commit immediately while the field is still focused
+- complete typed quick dates commit immediately while the field is still focused
+- blur handling remains as a fallback for short inputs such as 13 becoming 13:00
+- quick creator now receives and displays composerStatusMessage
+- save/import validation errors are visible inside the quick popover instead of
+  failing silently
+
+This specifically helps flows such as:
+- typing 13:24 in the quick end-time field and pressing Create
+- typing a quick date like 16.04 and pressing Create
+- seeing why a quick create failed instead of only getting no visible result
+
+A separate quick-default issue was also fixed:
+- saving an all-day event no longer turns the next quick-create default into a
+  strange 24 hour timed event
+- normalizeTimedDurationMinutes keeps normal timed defaults below 24 hours
+- all-day remains an explicit chip action rather than a remembered timed default
+
+Main files involved:
+- Application/src/renderer/components/EventComposerFields.jsx
+- Application/src/renderer/components/QuickEventPopover.jsx
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/renderer.jsx
+
+
+5. Month view previous-month label
+----------------------------------
+
+The last UI request was about the month grid. In April 2026, the first row shows
+March 30 and March 31 before April 1. Before this change, those previous-month
+days showed only 30 and 31, while the next month already showed May 1.
+
+The month tile label logic was updated so the first visible day from the
+previous month also shows its month name.
+
+Example after the change:
+- Mar 30
+- 31
+- Apr 1
+- 2
+- ...
+- May 1
+- 2
+- 3
+
+The existing behavior for day 1 month labels remains in place, so Apr 1 and May
+1 still show their month names.
+
+Main file involved:
+- Application/src/renderer/components/calendar-helpers.js
+
+
+6. Tests added and updated
+--------------------------
+
+The test suite was extended for the new behavior.
+
+New/updated test coverage:
+- provider external calendar import snapshot refresh and detach behavior already
+  remained covered by the existing external calendar tests
+- flexible duration presets
+- custom end time duration calculation
+- all-day payload creation
+- all-day hydration
+- normal time editing clearing all-day mode
+- quick timed duration normalization so all-day does not become a persisted
+  timed default
+- month tile month labels for the April 2026 layout
+
+Tests added in Application/test/run-security-tests.js:
+- flexible_duration_and_all_day_drafts
+- month_tile_month_labels
+
+The test file now loads:
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/components/calendar-helpers.js
+
+
+7. Verification
+---------------
+
+The following commands were run successfully after the final changes:
+
+- npm test
+- npm run package
+
+There was one recurring Windows packaging issue:
+- Electron Forge sometimes failed with EPERM while renaming
+  Application/.webpack/renderer to Application/.webpack/x64/renderer.
+- The cause was running Calendar-app Electron processes holding the generated
+  .webpack folder open.
+- Only Electron processes launched from this app's local Electron binary were
+  closed.
+- After closing those processes, npm run package completed successfully.
+
+No main/preload IPC additions were required for the provider calendar import
+work.
+
+
+8. Source areas touched during this chat
+----------------------------------------
+
+Provider calendar imports:
+- Application/src/renderer/components/ConnectedAccountsPanel.jsx
+- Application/src/renderer/components/SettingsWindow.jsx
+- Application/src/renderer/components/introduction.jsx
+- Application/src/renderer/renderer.jsx
+
+Flexible duration and all-day events:
+- Application/src/renderer/eventDraft.js
+- Application/src/renderer/components/EventComposerFields.jsx
+- Application/src/renderer/components/EventComposerDrawer.jsx
+- Application/src/renderer/components/QuickEventPopover.jsx
+- Application/src/renderer/components/Views/DayView.jsx
+- Application/src/renderer/components/Views/WeekView.jsx
+- Application/src/renderer/components/eventPresentation.js
+- Application/src/renderer/renderer.jsx
+
+Month grid label fix:
+- Application/src/renderer/components/calendar-helpers.js
+
+Tests:
+- Application/test/run-security-tests.js
+
+
+9. Assumptions kept during the work
+-----------------------------------
+
+Provider calendar imports:
+- provider imports are explicit, not automatic
+- users import one remote calendar at a time
+- local file import remains in the existing Settings card
+
+Event timing:
+- duration chips are shortcuts, not limits
+- custom same-day end times are allowed
+- one explicit all-day/24-hour option is supported
+- multi-day timed events remain out of scope until the composer has an end-date
+  field
+
+Month labels:
+- only the first visible previous-month tile needs the previous month label
+- day 1 of any visible month still shows the month label

@@ -19,6 +19,7 @@ import {
 } from './components/calendar-helpers';
 import {
   addMinutesToDate,
+  ALL_DAY_DURATION_MINUTES,
   buildEventPayloadFromDraft,
   createNotificationDraft,
   createDraftEventFromEvent,
@@ -34,12 +35,16 @@ import {
   isValidEmailAddress,
   normalizeEmailAddress,
   isDraftEventValid,
+  normalizeTimedDurationMinutes,
   normalizeNotificationDrafts,
   normalizeNotificationRecipients,
   normalizeReminderMinutesBeforeStart,
   scopeToInviteProvider,
+  setDraftAllDay,
   syncDraftNotificationFields,
   setDraftDuration,
+  setDraftEndTime,
+  setDraftStartTime,
 } from './eventDraft';
 import {
   promoteComposerStateToDrawer,
@@ -167,6 +172,13 @@ function getQuickComposerDefaults(preferences) {
   };
 }
 
+function getQuickComposerDuration(preferences) {
+  return normalizeTimedDurationMinutes(
+    preferences.defaultQuickDuration,
+    preferences.defaultEventDuration
+  );
+}
+
 function collectKnownNotificationEmails(preferences, connectedAccounts = []) {
   const knownEmails = new Set();
 
@@ -250,7 +262,7 @@ function getInviteTargetPreferencePatch(provider, target) {
 function createDraftForDate(date, preferences) {
   return createEmptyDraftEvent(
     date,
-    preferences.defaultQuickDuration || preferences.defaultEventDuration,
+    getQuickComposerDuration(preferences),
     getQuickComposerDefaults(preferences)
   );
 }
@@ -1021,22 +1033,11 @@ function App() {
       }
 
       if (name === 'time') {
-        const durationMinutes = getDraftDurationMinutes(current, preferences.defaultEventDuration);
-        nextDraft.durationMinutes = durationMinutes;
-        nextDraft.endTime = formatTimeForInput(
-          addMinutesToDate(new Date(`${current.date}T${value}:00`), durationMinutes)
-        );
+        return setDraftStartTime(current, normalizedValue, preferences.defaultEventDuration);
       }
 
       if (name === 'endTime') {
-        const nextDuration = getDraftDurationMinutes(
-          {
-            ...current,
-            endTime: value,
-          },
-          preferences.defaultEventDuration
-        );
-        nextDraft.durationMinutes = nextDuration;
+        return setDraftEndTime(current, normalizedValue, preferences.defaultEventDuration);
       }
 
       if (name === 'scope') {
@@ -1083,6 +1084,10 @@ function App() {
 
   const handleSelectDuration = (durationMinutes) => {
     setDraftEvent((current) => setDraftDuration(current, durationMinutes));
+  };
+
+  const handleSelectAllDay = () => {
+    setDraftEvent((current) => setDraftAllDay(current));
   };
 
   const handleToggleTagFilter = (filterId) => {
@@ -1163,14 +1168,18 @@ function App() {
     });
   };
 
-  const handleLoadExternalCalendars = async (accountId) => {
+  const handleLoadExternalCalendars = async (accountId, options = {}) => {
     if (!accountId) {
-      return;
+      return [];
     }
 
     const existingState = externalCalendarsByAccount[accountId];
-    if (existingState?.status === 'ready' || existingState?.status === 'loading') {
-      return;
+    const force = options?.force === true;
+    if (existingState?.status === 'loading') {
+      return existingState.items || [];
+    }
+    if (!force && existingState?.status === 'ready') {
+      return existingState.items || [];
     }
 
     setExternalCalendarsByAccount((current) => ({
@@ -1184,14 +1193,16 @@ function App() {
 
     try {
       const calendars = await window.calendarApp.listExternalCalendars({ accountId });
+      const items = Array.isArray(calendars) ? calendars : [];
       setExternalCalendarsByAccount((current) => ({
         ...current,
         [accountId]: {
           status: 'ready',
-          items: Array.isArray(calendars) ? calendars : [],
+          items,
           error: '',
         },
       }));
+      return items;
     } catch (error) {
       rememberAppError(error, 'external-calendar-list');
       setExternalCalendarsByAccount((current) => ({
@@ -1202,17 +1213,45 @@ function App() {
           error: error?.message || 'Could not load calendars for this account.',
         },
       }));
+      return existingState?.items || [];
+    }
+  };
+
+  const handleImportExternalCalendar = async ({ accountId, remoteCalendarId } = {}) => {
+    if (!accountId || !remoteCalendarId) {
+      throw new Error('Choose a connected account and calendar to import.');
+    }
+
+    try {
+      const result = await window.calendarApp.importExternalCalendar({
+        accountId,
+        remoteCalendarId,
+      });
+      if (result?.snapshot) {
+        snapshotRef.current = result.snapshot;
+        setSnapshot(result.snapshot);
+      }
+      return result;
+    } catch (error) {
+      rememberAppError(error, 'external-calendar-import');
+      throw error;
     }
   };
 
   const persistQuickComposerDefaults = () => {
+    const draftDuration = getDraftDurationMinutes(
+      draftEvent,
+      preferences.defaultEventDuration
+    );
+    const nextQuickDuration =
+      draftEvent.isAllDay || draftDuration >= ALL_DAY_DURATION_MINUTES
+        ? getQuickComposerDuration(preferences)
+        : normalizeTimedDurationMinutes(draftDuration, preferences.defaultEventDuration);
+
     updatePreference(setPreferences, {
       defaultQuickType: draftEvent.type,
       defaultQuickSendFrom: draftEvent.scope,
-      defaultQuickDuration: getDraftDurationMinutes(
-        draftEvent,
-        preferences.defaultEventDuration
-      ),
+      defaultQuickDuration: nextQuickDuration,
     });
   };
 
@@ -1661,8 +1700,11 @@ function App() {
         connectedAccounts={connectedAccounts}
         providers={notificationProviders}
         oauthClientConfig={oauthClientConfig}
+        externalCalendarsByAccount={externalCalendarsByAccount}
         onConnectProvider={handleStartOAuthConnect}
         onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+        onLoadExternalCalendars={handleLoadExternalCalendars}
+        onImportExternalCalendar={handleImportExternalCalendar}
         onDisconnectAccount={handleDisconnectAccount}
         onRevokeAccount={handleRevokeAccount}
         oauthBusyProvider={oauthBusyProvider}
@@ -1758,8 +1800,11 @@ function App() {
           connectedAccounts={connectedAccounts}
           providers={notificationProviders}
           oauthClientConfig={oauthClientConfig}
+          externalCalendarsByAccount={externalCalendarsByAccount}
           onConnectProvider={handleStartOAuthConnect}
           onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+          onLoadExternalCalendars={handleLoadExternalCalendars}
+          onImportExternalCalendar={handleImportExternalCalendar}
           onDisconnectAccount={handleDisconnectAccount}
           onRevokeAccount={handleRevokeAccount}
           oauthBusyProvider={oauthBusyProvider}
@@ -1894,8 +1939,11 @@ function App() {
               connectedAccounts={connectedAccounts}
               providers={notificationProviders}
               oauthClientConfig={oauthClientConfig}
+              externalCalendarsByAccount={externalCalendarsByAccount}
               onConnectProvider={handleStartOAuthConnect}
               onSaveOAuthClientConfig={handleSaveOAuthClientConfig}
+              onLoadExternalCalendars={handleLoadExternalCalendars}
+              onImportExternalCalendar={handleImportExternalCalendar}
               onDisconnectAccount={handleDisconnectAccount}
               onRevokeAccount={handleRevokeAccount}
               oauthBusyProvider={oauthBusyProvider}
@@ -1915,6 +1963,7 @@ function App() {
         onClose={closeComposer}
         onFieldChange={handleDraftFieldChange}
         onSelectDuration={handleSelectDuration}
+        onSelectAllDay={handleSelectAllDay}
         conflictSummary={conflictSummary}
         onOpenFullDetails={() => setComposerState((current) => promoteComposerStateToDrawer(current))}
         knownNotificationEmails={knownNotificationEmails}
@@ -1924,6 +1973,7 @@ function App() {
         onOpenConnectionSettings={handleOpenConnectionSettings}
         oauthBusyProvider={oauthBusyProvider}
         oauthStatusMessage={oauthStatusMessage}
+        composerStatusMessage={composerStatusMessage}
         onSubmit={handleSaveEvent}
         popoverRef={quickPopoverRef}
       />
@@ -1946,6 +1996,7 @@ function App() {
         onClose={closeComposer}
         onFieldChange={handleDraftFieldChange}
         onSelectDuration={handleSelectDuration}
+        onSelectAllDay={handleSelectAllDay}
         onFindFreeSlot={handleFindFreeSlot}
         conflictSummary={conflictSummary}
         knownNotificationEmails={knownNotificationEmails}

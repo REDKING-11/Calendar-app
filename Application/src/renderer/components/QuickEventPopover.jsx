@@ -43,6 +43,7 @@ export default function QuickEventPopover({
   onClose,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   conflictSummary,
   onOpenFullDetails,
   knownNotificationEmails,
@@ -52,6 +53,7 @@ export default function QuickEventPopover({
   onOpenConnectionSettings,
   oauthBusyProvider,
   oauthStatusMessage,
+  composerStatusMessage,
   onSubmit,
   popoverRef,
 }) {
@@ -207,6 +209,7 @@ export default function QuickEventPopover({
           draftEvent={draftEvent}
           onFieldChange={onFieldChange}
           onSelectDuration={onSelectDuration}
+          onSelectAllDay={onSelectAllDay}
           conflictSummary={conflictSummary}
           titleAutoFocus
           variant="quick"
@@ -226,6 +229,10 @@ export default function QuickEventPopover({
           oauthBusyProvider={oauthBusyProvider}
           oauthStatusMessage={oauthStatusMessage}
         />
+
+        {composerStatusMessage ? (
+          <p className="settings-inline-warning event-composer-status">{composerStatusMessage}</p>
+        ) : null}
 
         <div className="static m-0 flex flex-wrap justify-end gap-2.5 bg-transparent p-0 backdrop-blur-none">
           <button

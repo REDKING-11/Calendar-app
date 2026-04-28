@@ -122,7 +122,7 @@ function getVisibleEventLayout(event, windowState, pixelsPerHour) {
   const startsAt = new Date(event.startsAt);
   const endsAt = new Date(event.endsAt);
   const eventStartMinutes = startsAt.getHours() * 60 + startsAt.getMinutes();
-  const eventEndMinutes = endsAt.getHours() * 60 + endsAt.getMinutes();
+  const eventEndMinutes = event.isAllDay ? 24 * 60 : endsAt.getHours() * 60 + endsAt.getMinutes();
   const clippedStart = Math.max(eventStartMinutes, windowState.startMinutes);
   const clippedEnd = Math.min(eventEndMinutes, windowState.endMinutes);
   const clippedDuration = clippedEnd - clippedStart;

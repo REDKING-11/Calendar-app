@@ -99,12 +99,53 @@ function buildConfigDraft(oauthClientConfig = {}) {
   );
 }
 
+function getCalendarImportKey(accountId, remoteCalendarId) {
+  return `${accountId || ''}::${remoteCalendarId || ''}`;
+}
+
+function formatCount(count, label) {
+  return `${count} ${label}${count === 1 ? '' : 's'}`;
+}
+
+function formatCalendarImportResult(result = {}) {
+  const createdCount = Number(result.createdCount || 0);
+  const updatedCount = Number(result.updatedCount || 0);
+  const removedCount = Number(result.removedCount || 0);
+  const parts = [];
+
+  if (createdCount > 0) {
+    parts.push(formatCount(createdCount, 'new event'));
+  }
+  if (updatedCount > 0) {
+    parts.push(formatCount(updatedCount, 'updated event'));
+  }
+  if (removedCount > 0) {
+    parts.push(formatCount(removedCount, 'removed event'));
+  }
+
+  return parts.length > 0
+    ? `Calendar import finished: ${parts.join(', ')}.`
+    : 'Calendar is already up to date.';
+}
+
+function getCalendarAccessLabel(calendar = {}) {
+  const accessRole = String(calendar.accessRole || '').trim();
+  if (!accessRole) {
+    return 'Provider calendar';
+  }
+
+  return `${accessRole.charAt(0).toUpperCase()}${accessRole.slice(1)} access`;
+}
+
 export default function ConnectedAccountsPanel({
   connectedAccounts = [],
   providers = [],
   oauthClientConfig = {},
+  externalCalendarsByAccount = {},
   onConnectProvider,
   onSaveOAuthClientConfig,
+  onLoadExternalCalendars,
+  onImportExternalCalendar,
   onDisconnectAccount,
   onRevokeAccount,
   oauthBusyProvider = '',
@@ -122,6 +163,7 @@ export default function ConnectedAccountsPanel({
   const [setupMessage, setSetupMessage] = useState('');
   const [isSavingSetup, setIsSavingSetup] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [calendarImportFeedback, setCalendarImportFeedback] = useState({});
   const hasUnconfiguredProvider = supportedProviders.some((provider) => !provider.configured);
 
   useEffect(() => {
@@ -199,6 +241,44 @@ export default function ConnectedAccountsPanel({
       await window.calendarApp?.openExternalLink?.(url);
     } catch (error) {
       setSetupMessage(error?.message || 'That help link could not be opened.');
+    }
+  };
+
+  const handleLoadAccountCalendars = async (accountId, options = {}) => {
+    await onLoadExternalCalendars?.(accountId, options);
+  };
+
+  const handleImportProviderCalendar = async (accountId, calendar = {}) => {
+    const remoteCalendarId = calendar.remoteCalendarId;
+    const feedbackKey = getCalendarImportKey(accountId, remoteCalendarId);
+    setCalendarImportFeedback((current) => ({
+      ...current,
+      [feedbackKey]: {
+        status: 'loading',
+        message: `Importing ${calendar.displayName || 'calendar'}...`,
+      },
+    }));
+
+    try {
+      const result = await onImportExternalCalendar?.({
+        accountId,
+        remoteCalendarId,
+      });
+      setCalendarImportFeedback((current) => ({
+        ...current,
+        [feedbackKey]: {
+          status: 'success',
+          message: formatCalendarImportResult(result),
+        },
+      }));
+    } catch (error) {
+      setCalendarImportFeedback((current) => ({
+        ...current,
+        [feedbackKey]: {
+          status: 'error',
+          message: error?.message || 'Calendar could not be imported.',
+        },
+      }));
     }
   };
 
@@ -547,76 +627,187 @@ export default function ConnectedAccountsPanel({
           {connectedAccounts.map((account) => {
             const label = getProviderLabel(account.provider);
             const isBusy = accountBusyId === account.accountId;
+            const calendarState = externalCalendarsByAccount[account.accountId] || {
+              status: 'idle',
+              items: [],
+              error: '',
+            };
+            const accountCalendars = Array.isArray(calendarState.items) ? calendarState.items : [];
+            const canImportProviderCalendars = account.status === 'connected';
+            const isCalendarListLoading = calendarState.status === 'loading';
             const needsReconnect =
               account.status !== 'connected' || !account.canWrite || !account.writeScopeGranted;
             return (
               <article
                 key={account.accountId}
-                className="flex items-center justify-between gap-3.5 rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-muted)] p-3.5"
+                className="grid gap-3.5 rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-muted)] p-3.5"
               >
-                <div>
-                  <p className="m-0 mb-1 text-[0.72rem] font-extrabold uppercase tracking-[0.12em] text-[var(--text-muted)]">
-                    {label}
-                  </p>
-                  <h4 className="m-0 text-[0.98rem] font-extrabold text-[var(--text-primary)]">
-                    {getAccountTitle(account)}
-                  </h4>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <span
-                      className={`${ACCOUNT_BADGE_CLASS} ${
-                        account.status === 'disconnected' ? ACCOUNT_BADGE_MUTED_CLASS : ''
-                      }`}
+                <div className="flex items-center justify-between gap-3.5">
+                  <div className="min-w-0">
+                    <p className="m-0 mb-1 text-[0.72rem] font-extrabold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                      {label}
+                    </p>
+                    <h4 className="m-0 text-[0.98rem] font-extrabold text-[var(--text-primary)]">
+                      {getAccountTitle(account)}
+                    </h4>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <span
+                        className={`${ACCOUNT_BADGE_CLASS} ${
+                          account.status === 'disconnected' ? ACCOUNT_BADGE_MUTED_CLASS : ''
+                        }`}
+                      >
+                        {account.status || 'unknown'}
+                      </span>
+                      <span
+                        className={`${ACCOUNT_BADGE_CLASS} ${
+                          account.canWrite ? '' : ACCOUNT_BADGE_MUTED_CLASS
+                        }`}
+                      >
+                        {account.canWrite ? 'Calendar write' : 'Read only'}
+                      </span>
+                      <span
+                        className={`${ACCOUNT_BADGE_CLASS} ${
+                          account.mailScopeGranted ? '' : ACCOUNT_BADGE_MUTED_CLASS
+                        }`}
+                      >
+                        {account.mailScopeGranted ? 'Mail send' : 'No mail send'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2.5">
+                    <button
+                      type="button"
+                      className="app-button app-button--secondary"
+                      disabled={oauthBusyProvider === account.provider || isSavingSetup}
+                      onClick={() => handleConnectProvider(account.provider)}
                     >
-                      {account.status || 'unknown'}
-                    </span>
-                    <span
-                      className={`${ACCOUNT_BADGE_CLASS} ${
-                        account.canWrite ? '' : ACCOUNT_BADGE_MUTED_CLASS
-                      }`}
+                      {oauthBusyProvider === account.provider
+                        ? 'Reconnecting...'
+                        : isSavingSetup
+                          ? 'Saving setup...'
+                          : needsReconnect
+                            ? 'Reconnect'
+                            : 'Reconnect'}
+                    </button>
+                    <button
+                      type="button"
+                      className="app-button app-button--secondary"
+                      disabled={isBusy || account.status !== 'connected'}
+                      onClick={() => onDisconnectAccount?.(account.accountId)}
                     >
-                      {account.canWrite ? 'Calendar write' : 'Read only'}
-                    </span>
-                    <span
-                      className={`${ACCOUNT_BADGE_CLASS} ${
-                        account.mailScopeGranted ? '' : ACCOUNT_BADGE_MUTED_CLASS
-                      }`}
+                      Disconnect
+                    </button>
+                    <button
+                      type="button"
+                      className="app-button app-danger-button"
+                      disabled={isBusy}
+                      onClick={() => onRevokeAccount?.(account.accountId)}
                     >
-                      {account.mailScopeGranted ? 'Mail send' : 'No mail send'}
-                    </span>
+                      Revoke
+                    </button>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2.5">
-                  <button
-                    type="button"
-                    className="app-button app-button--secondary"
-                    disabled={oauthBusyProvider === account.provider || isSavingSetup}
-                    onClick={() => handleConnectProvider(account.provider)}
-                  >
-                    {oauthBusyProvider === account.provider
-                      ? 'Reconnecting...'
-                      : isSavingSetup
-                        ? 'Saving setup...'
-                        : needsReconnect
-                          ? 'Reconnect'
-                          : 'Reconnect'}
-                  </button>
-                  <button
-                    type="button"
-                    className="app-button app-button--secondary"
-                    disabled={isBusy || account.status !== 'connected'}
-                    onClick={() => onDisconnectAccount?.(account.accountId)}
-                  >
-                    Disconnect
-                  </button>
-                  <button
-                    type="button"
-                    className="app-button app-danger-button"
-                    disabled={isBusy}
-                    onClick={() => onRevokeAccount?.(account.accountId)}
-                  >
-                    Revoke
-                  </button>
-                </div>
+
+                {canImportProviderCalendars ? (
+                  <section className="grid gap-2 border-t border-[var(--border-color)] pt-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="m-0 text-[0.72rem] font-extrabold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                          Calendars
+                        </p>
+                        <p className="notification-helper-copy m-0">
+                          Choose which remote calendars to import. Nothing imports automatically.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="app-button app-button--secondary"
+                        disabled={!onLoadExternalCalendars || isCalendarListLoading}
+                        onClick={() =>
+                          handleLoadAccountCalendars(account.accountId, {
+                            force: calendarState.status === 'ready' || calendarState.status === 'error',
+                          })
+                        }
+                      >
+                        {isCalendarListLoading
+                          ? 'Loading calendars...'
+                          : calendarState.status === 'ready'
+                            ? 'Refresh calendars'
+                            : 'Load calendars'}
+                      </button>
+                    </div>
+
+                    {calendarState.error ? (
+                      <p className="settings-inline-warning">{calendarState.error}</p>
+                    ) : null}
+
+                    {calendarState.status === 'idle' ? (
+                      <p className="notification-helper-copy m-0">
+                        Load calendars to choose a Google or Outlook calendar for import.
+                      </p>
+                    ) : null}
+
+                    {calendarState.status === 'ready' && accountCalendars.length === 0 ? (
+                      <p className="notification-helper-copy m-0">
+                        No calendars were returned for this account.
+                      </p>
+                    ) : null}
+
+                    {accountCalendars.length > 0 ? (
+                      <div className="grid gap-1.5">
+                        {accountCalendars.map((calendar) => {
+                          const feedbackKey = getCalendarImportKey(
+                            account.accountId,
+                            calendar.remoteCalendarId
+                          );
+                          const importFeedback = calendarImportFeedback[feedbackKey];
+                          const isImporting = importFeedback?.status === 'loading';
+
+                          return (
+                            <div
+                              key={calendar.remoteCalendarId}
+                              className="grid gap-2 border-t border-[var(--border-color)] py-2 first:border-t-0 first:pt-0 sm:grid-cols-[1fr_auto] sm:items-center"
+                            >
+                              <div className="min-w-0">
+                                <p className="m-0 font-bold text-[var(--text-primary)]">
+                                  {calendar.displayName || calendar.remoteCalendarId}
+                                </p>
+                                <p className="m-0 text-[0.78rem] text-[var(--text-secondary)]">
+                                  {getCalendarAccessLabel(calendar)}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className="app-button app-button--secondary"
+                                disabled={
+                                  isImporting ||
+                                  !onImportExternalCalendar ||
+                                  !calendar.remoteCalendarId
+                                }
+                                onClick={() =>
+                                  handleImportProviderCalendar(account.accountId, calendar)
+                                }
+                              >
+                                {isImporting ? 'Importing...' : 'Import'}
+                              </button>
+                              {importFeedback?.message ? (
+                                <p
+                                  className={`m-0 text-[0.82rem] leading-5 sm:col-span-2 ${
+                                    importFeedback.status === 'error'
+                                      ? 'settings-inline-warning'
+                                      : 'text-[var(--text-secondary)]'
+                                  }`}
+                                >
+                                  {importFeedback.message}
+                                </p>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
               </article>
             );
           })}

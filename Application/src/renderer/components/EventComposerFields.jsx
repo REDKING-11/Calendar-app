@@ -9,6 +9,7 @@ import {
   INVITE_DELIVERY_MODE_OPTIONS,
   extractInviteeEmails,
   formatDateForInput,
+  formatDurationLabel,
   getDraftDurationMinutes,
   scopeToInviteProvider,
 } from '../eventDraft';
@@ -122,6 +123,10 @@ function parseQuickDateInputValue(value, fallbackDateValue) {
   return formatDateForInput(parsedDate);
 }
 
+function isCompleteQuickDateInputValue(value) {
+  return /^\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?$/.test(String(value || '').trim());
+}
+
 function normalizeTimeInputValue(value) {
   return String(value || '')
     .replace(/[^\d:.-]/g, '')
@@ -169,6 +174,11 @@ function parseTimeInputValue(value) {
   }
 
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function isCompleteTimeInputValue(value) {
+  const normalizedValue = String(value || '').trim().replace(/\./g, ':');
+  return /^\d{1,2}:\d{2}$/.test(normalizedValue) || /^\d{3,4}$/.test(normalizedValue);
 }
 
 function TimeTextField({
@@ -225,7 +235,14 @@ function TimeTextField({
         window.requestAnimationFrame(() => event.target.select());
       }}
       onChange={(event) => {
-        setInputValue(normalizeTimeInputValue(event.target.value));
+        const nextInputValue = normalizeTimeInputValue(event.target.value);
+        setInputValue(nextInputValue);
+        if (isCompleteTimeInputValue(nextInputValue)) {
+          const parsedValue = parseTimeInputValue(nextInputValue);
+          if (parsedValue) {
+            onCommit(parsedValue);
+          }
+        }
       }}
       onBlur={() => {
         commitValue();
@@ -265,10 +282,12 @@ function FullTimingBlock({
   draftEvent,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   conflictSummary,
   onFindFreeSlot,
 }) {
   const durationMinutes = getDraftDurationMinutes(draftEvent, 60);
+  const durationLabel = draftEvent.isAllDay ? 'All day' : formatDurationLabel(durationMinutes);
   const availability = buildAvailabilityState(conflictSummary);
   const conflictList = formatConflictList(conflictSummary);
 
@@ -319,14 +338,21 @@ function FullTimingBlock({
               key={option.id}
               type="button"
               className={`event-duration-chip ${
-                durationMinutes === option.id ? 'event-duration-chip--active' : ''
+                !draftEvent.isAllDay && durationMinutes === option.id ? 'event-duration-chip--active' : ''
               }`}
               onClick={() => onSelectDuration(option.id)}
             >
               {option.label}
             </button>
           ))}
-          <span className="event-duration-label app-text-soft">{durationMinutes} min</span>
+          <button
+            type="button"
+            className={`event-duration-chip ${draftEvent.isAllDay ? 'event-duration-chip--active' : ''}`}
+            onClick={onSelectAllDay}
+          >
+            All day
+          </button>
+          <span className="event-duration-label app-text-soft">{durationLabel}</span>
         </div>
 
         <button
@@ -354,9 +380,11 @@ function QuickTimingBlock({
   draftEvent,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   conflictSummary,
 }) {
   const durationMinutes = getDraftDurationMinutes(draftEvent, 60);
+  const durationLabel = draftEvent.isAllDay ? 'All day' : formatDurationLabel(durationMinutes);
   const availability = buildAvailabilityState(conflictSummary);
   const [isDateInputFocused, setIsDateInputFocused] = useState(false);
   const [dateInputValue, setDateInputValue] = useState(() => formatQuickDateInputValue(draftEvent.date));
@@ -399,7 +427,14 @@ function QuickTimingBlock({
             window.requestAnimationFrame(() => event.target.select());
           }}
           onChange={(event) => {
-            setDateInputValue(normalizeQuickDateInputValue(event.target.value));
+            const nextInputValue = normalizeQuickDateInputValue(event.target.value);
+            setDateInputValue(nextInputValue);
+            if (isCompleteQuickDateInputValue(nextInputValue)) {
+              const nextDateValue = parseQuickDateInputValue(nextInputValue, draftEvent.date);
+              if (nextDateValue) {
+                onFieldChange('date', nextDateValue);
+              }
+            }
           }}
           onBlur={() => {
             commitDateInputValue();
@@ -445,13 +480,23 @@ function QuickTimingBlock({
               key={option.id}
               type="button"
               className={`event-duration-chip event-duration-chip--compact ${
-                durationMinutes === option.id ? 'event-duration-chip--active' : ''
+                !draftEvent.isAllDay && durationMinutes === option.id ? 'event-duration-chip--active' : ''
               }`}
               onClick={() => onSelectDuration(option.id)}
             >
               {option.label}
             </button>
           ))}
+          <button
+            type="button"
+            className={`event-duration-chip event-duration-chip--compact ${
+              draftEvent.isAllDay ? 'event-duration-chip--active' : ''
+            }`}
+            onClick={onSelectAllDay}
+          >
+            All day
+          </button>
+          <span className="event-duration-label app-text-soft">{durationLabel}</span>
         </div>
       </div>
 
@@ -826,6 +871,7 @@ function QuickComposerLayout({
   draftEvent,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   conflictSummary,
   titleAutoFocus,
 }) {
@@ -850,6 +896,7 @@ function QuickComposerLayout({
         draftEvent={draftEvent}
         onFieldChange={onFieldChange}
         onSelectDuration={onSelectDuration}
+        onSelectAllDay={onSelectAllDay}
         conflictSummary={conflictSummary}
       />
 
@@ -1097,6 +1144,7 @@ export default function EventComposerFields({
   draftEvent,
   onFieldChange,
   onSelectDuration,
+  onSelectAllDay,
   conflictSummary,
   onFindFreeSlot,
   titleAutoFocus = false,
@@ -1119,6 +1167,7 @@ export default function EventComposerFields({
         draftEvent={draftEvent}
         onFieldChange={onFieldChange}
         onSelectDuration={onSelectDuration}
+        onSelectAllDay={onSelectAllDay}
         conflictSummary={conflictSummary}
         titleAutoFocus={titleAutoFocus}
       />
@@ -1150,6 +1199,7 @@ export default function EventComposerFields({
             draftEvent={draftEvent}
             onFieldChange={onFieldChange}
             onSelectDuration={onSelectDuration}
+            onSelectAllDay={onSelectAllDay}
             conflictSummary={conflictSummary}
             onFindFreeSlot={onFindFreeSlot}
           />

@@ -47,5 +47,9 @@ export function getEventContextLabel(event) {
 }
 
 export function getEventTimeLabel(event, preferences) {
+  if (event?.isAllDay) {
+    return 'All day';
+  }
+
   return `${formatTime(event.startsAt, preferences)} - ${formatTime(event.endsAt, preferences)}`;
 }
