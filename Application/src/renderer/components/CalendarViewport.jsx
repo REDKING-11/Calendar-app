@@ -10,6 +10,7 @@ export default function CalendarViewport({
   calendarView,
   events,
   eventDateIndex,
+  externalCalendarSources = [],
   todayEvents,
   preferences,
   selectedDate,
@@ -34,6 +35,7 @@ export default function CalendarViewport({
           headerRef={headerRef}
           events={events}
           eventDateIndex={eventDateIndex}
+          externalCalendarSources={externalCalendarSources}
           todayEvents={todayEvents}
           preferences={preferences}
           selectedDate={selectedDate}
@@ -49,6 +51,7 @@ export default function CalendarViewport({
           headerRef={headerRef}
           events={events}
           eventDateIndex={eventDateIndex}
+          externalCalendarSources={externalCalendarSources}
           todayEvents={todayEvents}
           preferences={preferences}
           timeZone={timeZone}
@@ -65,6 +68,7 @@ export default function CalendarViewport({
           headerRef={headerRef}
           events={events}
           eventDateIndex={eventDateIndex}
+          externalCalendarSources={externalCalendarSources}
           todayEvents={todayEvents}
           preferences={preferences}
           timeZone={timeZone}

@@ -3,7 +3,6 @@ import {
   addMinutesToTime,
   COLOR_PRESETS,
   DURATION_PRESET_OPTIONS,
-  EVENT_SCOPE_OPTIONS,
   EVENT_TYPE_OPTIONS,
   EVENT_TITLE_MAX_LENGTH,
   INVITE_DELIVERY_MODE_OPTIONS,
@@ -540,28 +539,6 @@ function CategoryPicker({ draftEvent, onFieldChange, compact = false, showLabel 
   );
 }
 
-function ScopeField({ draftEvent, onFieldChange, compact = false, showLabel = true }) {
-  return (
-    <div className="event-composer-field">
-      {showLabel ? <label className="event-field-label">Event scope</label> : null}
-      <div className={`event-scope-row ${compact ? 'event-scope-row--compact' : ''}`}>
-        {EVENT_SCOPE_OPTIONS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className={`event-scope-pill ${
-              draftEvent.scope === option.id ? 'event-scope-pill--active' : ''
-            }`}
-            onClick={() => onFieldChange('scope', option.id)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function TypeField({ draftEvent, onFieldChange, compact = false, showLabel = true }) {
   return (
     <div className="event-composer-field">
@@ -609,6 +586,78 @@ function isWritableCalendar(calendar = {}) {
   return calendar.selected !== false;
 }
 
+function getInviteReadiness({
+  draftEvent = {},
+  inviteEmails = [],
+  requiredProvider = '',
+  providerLabel = 'Provider',
+  selectedAccount = null,
+  writableCalendars = [],
+  calendarState = {},
+}) {
+  if (!requiredProvider || draftEvent.scope === 'internal') {
+    return {
+      tone: 'warning',
+      title: 'Local-only scope',
+      copy: 'Local events stay private in Calendar App. Pick Google or Outlook to save to a provider calendar.',
+    };
+  }
+
+  if (!selectedAccount) {
+    return {
+      tone: 'warning',
+      title: `${providerLabel} account needed`,
+      copy: `Choose a connected ${providerLabel} account with calendar write access.`,
+    };
+  }
+
+  if (calendarState.status === 'loading') {
+    return {
+      tone: 'muted',
+      title: 'Loading calendars',
+      copy: `Checking writable ${providerLabel} calendars for this account.`,
+    };
+  }
+
+  if (writableCalendars.length === 0) {
+    return {
+      tone: 'warning',
+      title: 'No writable calendar',
+      copy: `This account does not have a writable ${providerLabel} calendar available yet.`,
+    };
+  }
+
+  if (!draftEvent.inviteTargetCalendarId) {
+    return {
+      tone: 'warning',
+      title: 'Calendar needed',
+      copy: 'Choose which calendar should own this event.',
+    };
+  }
+
+  if (draftEvent.inviteDeliveryMode !== 'provider_invite') {
+    return {
+      tone: 'muted',
+      title: 'Saving locally',
+      copy: `Switch delivery to Save to calendar when this should appear in ${providerLabel}.`,
+    };
+  }
+
+  if (inviteEmails.length === 0) {
+    return {
+      tone: 'ready',
+      title: `Ready to save to ${providerLabel}`,
+      copy: 'No guests added. The event will still be created on the selected calendar.',
+    };
+  }
+
+  return {
+    tone: 'ready',
+    title: `Ready to save to ${providerLabel}`,
+    copy: `${inviteEmails.length} guest email${inviteEmails.length === 1 ? '' : 's'} will receive a calendar invite.`,
+  };
+}
+
 function InviteTargetSection({
   draftEvent,
   onFieldChange,
@@ -630,12 +679,16 @@ function InviteTargetSection({
   );
   const requiredProvider = scopeToInviteProvider(draftEvent.scope);
   const providerLabel = getProviderLabel(requiredProvider);
-  const providerAccounts = connectedAccounts.filter(
-    (account) =>
-      account.provider === requiredProvider &&
-      account.status === 'connected' &&
-      account.canWrite &&
-      account.writeScopeGranted
+  const providerAccounts = useMemo(
+    () =>
+      connectedAccounts.filter(
+        (account) =>
+          account.provider === requiredProvider &&
+          account.status === 'connected' &&
+          account.canWrite &&
+          account.writeScopeGranted
+      ),
+    [connectedAccounts, requiredProvider]
   );
   const selectedAccount = providerAccounts.find(
     (account) => account.accountId === draftEvent.inviteTargetAccountId
@@ -643,12 +696,23 @@ function InviteTargetSection({
   const calendarState = draftEvent.inviteTargetAccountId
     ? externalCalendarsByAccount[draftEvent.inviteTargetAccountId] || { status: 'idle', items: [] }
     : { status: 'idle', items: [] };
-  const writableCalendars = (calendarState.items || []).filter(isWritableCalendar);
-  const canSendInvites =
-    inviteEmails.length > 0 &&
+  const writableCalendars = useMemo(
+    () => (calendarState.items || []).filter(isWritableCalendar),
+    [calendarState.items]
+  );
+  const canSaveToProvider =
     requiredProvider &&
     selectedAccount &&
     draftEvent.inviteTargetCalendarId;
+  const readiness = getInviteReadiness({
+    draftEvent,
+    inviteEmails,
+    requiredProvider,
+    providerLabel,
+    selectedAccount,
+    writableCalendars,
+    calendarState,
+  });
 
   const handleUseGuestEmails = () => {
     const mergedEmails = Array.from(new Set([...inviteEmails, ...guestEmailCandidates]));
@@ -660,6 +724,42 @@ function InviteTargetSection({
       onLoadExternalCalendars?.(draftEvent.inviteTargetAccountId);
     }
   }, [draftEvent.inviteTargetAccountId, onLoadExternalCalendars]);
+
+  useEffect(() => {
+    if (
+      requiredProvider &&
+      !draftEvent.inviteTargetAccountId &&
+      providerAccounts.length === 1
+    ) {
+      onFieldChange('inviteTargetAccountId', providerAccounts[0].accountId);
+      onFieldChange('inviteTargetProvider', requiredProvider);
+      onFieldChange('inviteDeliveryMode', 'provider_invite');
+    }
+  }, [
+    draftEvent.inviteTargetAccountId,
+    onFieldChange,
+    providerAccounts,
+    requiredProvider,
+  ]);
+
+  useEffect(() => {
+    if (
+      requiredProvider &&
+      selectedAccount &&
+      !draftEvent.inviteTargetCalendarId &&
+      writableCalendars.length === 1
+    ) {
+      onFieldChange('inviteTargetCalendarId', writableCalendars[0].remoteCalendarId);
+      onFieldChange('inviteDeliveryMode', 'provider_invite');
+      onFieldChange('inviteTargetProvider', requiredProvider);
+    }
+  }, [
+    draftEvent.inviteTargetCalendarId,
+    onFieldChange,
+    requiredProvider,
+    selectedAccount,
+    writableCalendars,
+  ]);
 
   const handleAccountChange = (event) => {
     const accountId = event.target.value;
@@ -683,13 +783,13 @@ function InviteTargetSection({
   return (
     <section className="event-composer-section event-composer-panel-card app-subsurface invite-target-section">
       <div className="event-composer-section-heading">
-        <p className="settings-section-eyebrow">Invites</p>
-        <h3 className="event-composer-section-title">Invitees and delivery</h3>
+        <p className="settings-section-eyebrow">Calendar</p>
+        <h3 className="event-composer-section-title">Save target and guests</h3>
       </div>
 
       <div className="event-composer-field">
         <label htmlFor="event-invite-recipients" className="event-field-label">
-          Invite recipients
+          Guests
         </label>
         <input
           id="event-invite-recipients"
@@ -702,7 +802,7 @@ function InviteTargetSection({
         />
         <div className="invite-recipient-tools">
           <p className="notification-helper-copy">
-            This list controls provider invites. People/guests can stay as local context.
+            Only emails in this field receive provider calendar invites.
           </p>
           {guestEmailCandidates.length > 0 ? (
             <button
@@ -716,20 +816,9 @@ function InviteTargetSection({
         </div>
       </div>
 
-      <div className="invite-target-status">
-        {inviteEmails.length === 0 ? (
-          <p className="notification-helper-copy">
-            Add invite recipient emails here to send real calendar invites.
-          </p>
-        ) : draftEvent.scope === 'internal' ? (
-          <p className="settings-inline-warning">
-            Internal events stay in this app. Switch scope to Work or Personal before sending invites.
-          </p>
-        ) : (
-          <p className="notification-helper-copy">
-            {inviteEmails.length} invitee email{inviteEmails.length === 1 ? '' : 's'} will use {providerLabel}.
-          </p>
-        )}
+      <div className={`invite-target-status invite-target-status--${readiness.tone}`}>
+        <p className="invite-target-status-title">{readiness.title}</p>
+        <p className="notification-helper-copy m-0">{readiness.copy}</p>
       </div>
 
       <div className="invite-delivery-row" role="group" aria-label="Invite delivery mode">
@@ -740,10 +829,12 @@ function InviteTargetSection({
             className={`event-scope-pill ${
               draftEvent.inviteDeliveryMode === option.id ? 'event-scope-pill--active' : ''
             }`}
-            disabled={option.id === 'provider_invite' && (!requiredProvider || inviteEmails.length === 0)}
+            disabled={option.id === 'provider_invite' && !requiredProvider}
             onClick={() => onFieldChange('inviteDeliveryMode', option.id)}
+            title={option.description}
           >
-            {option.label}
+            <span>{option.label}</span>
+            <small>{option.description}</small>
           </button>
         ))}
       </div>
@@ -756,7 +847,7 @@ function InviteTargetSection({
               className="app-input w-full rounded-xl px-4 py-3"
               value={draftEvent.inviteTargetAccountId || ''}
               onChange={handleAccountChange}
-              disabled={providerAccounts.length === 0 || inviteEmails.length === 0}
+              disabled={providerAccounts.length === 0}
             >
               <option value="">Choose {providerLabel} account</option>
               {providerAccounts.map((account) => (
@@ -797,7 +888,7 @@ function InviteTargetSection({
           <p className="notification-helper-copy">
             {onOpenConnectionSettings
               ? `Open Settings to connect or reconnect ${providerLabel} with calendar write access.`
-              : `Connect or reconnect ${providerLabel} with calendar write access to send invites.`}
+              : `Connect or reconnect ${providerLabel} with calendar write access to save provider events.`}
           </p>
           <button
             type="button"
@@ -825,9 +916,9 @@ function InviteTargetSection({
       {draftEvent.lastInviteError ? (
         <p className="settings-inline-warning">{draftEvent.lastInviteError}</p>
       ) : null}
-      {canSendInvites ? (
+      {canSaveToProvider ? (
         <p className="notification-helper-copy">
-          Ready to send via {getAccountLabel(selectedAccount)}.
+          Saving through: {getAccountLabel(selectedAccount)}.
         </p>
       ) : null}
       {oauthStatusMessage ? <p className="notification-helper-copy">{oauthStatusMessage}</p> : null}
@@ -902,12 +993,6 @@ function QuickComposerLayout({
 
       <div className="quick-composer-secondary-row">
         <CategoryPicker
-          draftEvent={draftEvent}
-          onFieldChange={onFieldChange}
-          compact
-          showLabel={false}
-        />
-        <ScopeField
           draftEvent={draftEvent}
           onFieldChange={onFieldChange}
           compact
@@ -1204,10 +1289,7 @@ export default function EventComposerFields({
             onFindFreeSlot={onFindFreeSlot}
           />
 
-          <div className="event-composer-grid">
-            <CategoryPicker draftEvent={draftEvent} onFieldChange={onFieldChange} />
-            <ScopeField draftEvent={draftEvent} onFieldChange={onFieldChange} />
-          </div>
+          <CategoryPicker draftEvent={draftEvent} onFieldChange={onFieldChange} />
 
           <TypeField draftEvent={draftEvent} onFieldChange={onFieldChange} />
           <InviteTargetSection

@@ -30,6 +30,7 @@ function loadTranspiledModule(modulePath) {
     babelrc: false,
     configFile: false,
     presets: [
+      require.resolve('@babel/preset-react'),
       [
         require.resolve('@babel/preset-env'),
         {
@@ -58,8 +59,23 @@ const clickIntent = loadTranspiledModule(
 const composerRouting = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'composerRouting.js')
 );
+const calendarContextPersistence = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'calendarContextPersistence.js')
+);
+const popoverPositioning = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'popoverPositioning.js')
+);
+const calendarGrouping = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'calendarGrouping.js')
+);
+const eventPacking = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'eventPacking.js')
+);
 const calendarHelpers = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'components', 'calendar-helpers.js')
+);
+const headerComponent = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'components', 'Header.jsx')
 );
 const keyboardNavigation = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'keyboardNavigation.js')
@@ -363,6 +379,80 @@ function testComposerRoutingHelpers() {
   );
 }
 
+function testCalendarContextPersistenceHelpers() {
+  assert.equal(
+    calendarContextPersistence.shouldFallbackActiveCalendarContext({
+      snapshotLoaded: false,
+      activeCalendarContextId: 'source_google_samuel',
+      externalCalendarSources: [],
+    }),
+    false
+  );
+  assert.equal(
+    calendarContextPersistence.shouldFallbackActiveCalendarContext({
+      snapshotLoaded: true,
+      activeCalendarContextId: 'source_google_samuel',
+      externalCalendarSources: [{ sourceId: 'source_google_samuel' }],
+    }),
+    false
+  );
+  assert.equal(
+    calendarContextPersistence.shouldFallbackActiveCalendarContext({
+      snapshotLoaded: true,
+      activeCalendarContextId: 'source_google_samuel',
+      externalCalendarSources: [{ sourceId: 'source_google_family' }],
+    }),
+    true
+  );
+  assert.equal(
+    calendarContextPersistence.shouldFallbackActiveCalendarContext({
+      snapshotLoaded: true,
+      activeCalendarContextId: 'local',
+      externalCalendarSources: [],
+    }),
+    false
+  );
+}
+
+function testPopoverPositioningHelpers() {
+  assert.deepEqual(
+    popoverPositioning.clampFloatingPosition({
+      position: { left: 500, top: 760 },
+      size: { width: 360, height: 260 },
+      viewport: { width: 900, height: 800 },
+      margin: 16,
+    }),
+    {
+      left: 500,
+      top: 524,
+    }
+  );
+  assert.deepEqual(
+    popoverPositioning.clampFloatingPosition({
+      position: { left: -20, top: -50 },
+      size: { width: 360, height: 260 },
+      viewport: { width: 900, height: 800 },
+      margin: 16,
+    }),
+    {
+      left: 16,
+      top: 16,
+    }
+  );
+  assert.deepEqual(
+    popoverPositioning.clampFloatingPosition({
+      position: { left: 10, top: 10 },
+      size: { width: 1000, height: 900 },
+      viewport: { width: 900, height: 800 },
+      margin: 16,
+    }),
+    {
+      left: 16,
+      top: 16,
+    }
+  );
+}
+
 function testMonthTileMonthLabels() {
   const tiles = calendarHelpers.buildMonthTiles(
     new Date(2026, 3, 1, 12, 0, 0, 0),
@@ -386,6 +476,68 @@ function testMonthTileMonthLabels() {
 
   assert.equal(aprilFirst?.showMonthLabel, true);
   assert.equal(mayFirst?.showMonthLabel, true);
+}
+
+function testMonthTilesKeepAllSameDayEvents() {
+  const events = [
+    {
+      id: 'event_1',
+      title: 'Example',
+      startsAt: '2026-06-22T09:00:00.000Z',
+    },
+    {
+      id: 'event_2',
+      title: 'Example 2',
+      startsAt: '2026-06-22T09:00:00.000Z',
+    },
+    {
+      id: 'event_3',
+      title: 'Example 3',
+      startsAt: '2026-06-22T10:00:00.000Z',
+    },
+  ];
+  const index = calendarHelpers.buildEventDateIndex(events);
+  const tiles = calendarHelpers.buildMonthTiles(
+    new Date(2026, 5, 1, 12, 0, 0, 0),
+    events,
+    'Europe/Helsinki',
+    'monday',
+    index
+  );
+  const june22 = tiles.find(
+    (tile) =>
+      tile.date.getFullYear() === 2026 &&
+      tile.date.getMonth() === 5 &&
+      tile.date.getDate() === 22
+  );
+
+  assert.deepEqual(
+    june22.events.map((event) => event.id),
+    ['event_1', 'event_2', 'event_3']
+  );
+}
+
+function testHeaderDateRangeFormatting() {
+  const mondayWeek = headerComponent.formatHeaderDateRange(
+    new Date(2026, 5, 3, 12, 0),
+    'week',
+    'monday'
+  );
+  const sundayWeek = headerComponent.formatHeaderDateRange(
+    new Date(2026, 5, 3, 12, 0),
+    'week',
+    'sunday'
+  );
+
+  assert.equal(mondayWeek.includes('2026'), true);
+  assert.equal(mondayWeek.includes('1'), true);
+  assert.equal(mondayWeek.includes('7'), true);
+  assert.equal(sundayWeek.includes('2026'), true);
+  assert.equal(sundayWeek.includes('31'), true);
+  assert.equal(sundayWeek.includes('6'), true);
+  assert.doesNotThrow(() =>
+    headerComponent.formatHeaderDateRange(new Date(2026, 5, 3, 12, 0), 'week', 'auto')
+  );
 }
 
 function createMockFocusableElement({
@@ -546,6 +698,59 @@ function testEventScopeHelpers() {
   assert.equal(workDraft.scope, 'work');
   assert.equal(personalDraft.scope, 'personal');
 
+  const providerContext = {
+    provider: 'google',
+    scope: 'work',
+    accountId: 'acct_google',
+    calendarId: 'family_calendar',
+  };
+  const autoProviderDraft = eventDraft.applyCalendarContextToDraft(
+    internalDraft,
+    providerContext,
+    { autoSaveToProvider: true }
+  );
+  assert.equal(autoProviderDraft.scope, 'work');
+  assert.equal(autoProviderDraft.inviteTargetProvider, 'google');
+  assert.equal(autoProviderDraft.inviteTargetAccountId, 'acct_google');
+  assert.equal(autoProviderDraft.inviteTargetCalendarId, 'family_calendar');
+  assert.equal(autoProviderDraft.inviteDeliveryMode, 'provider_invite');
+  const autoProviderPayload = eventDraft.buildEventPayloadFromDraft(
+    {
+      ...autoProviderDraft,
+      title: 'Auto provider save',
+    },
+    30
+  );
+  assert.equal(autoProviderPayload.syncPolicy, 'google_sync');
+  assert.equal(autoProviderPayload.inviteDeliveryMode, 'provider_invite');
+  assert.equal(autoProviderPayload.inviteTargetCalendarId, 'family_calendar');
+
+  const manualProviderDraft = eventDraft.applyCalendarContextToDraft(
+    internalDraft,
+    providerContext,
+    { autoSaveToProvider: false }
+  );
+  assert.equal(manualProviderDraft.scope, 'work');
+  assert.equal(manualProviderDraft.inviteTargetProvider, 'google');
+  assert.equal(manualProviderDraft.inviteDeliveryMode, 'local_only');
+
+  const localContextDraft = eventDraft.applyCalendarContextToDraft(
+    {
+      ...workDraft,
+      inviteTargetAccountId: 'acct_google',
+      inviteTargetProvider: 'google',
+      inviteTargetCalendarId: 'family_calendar',
+      inviteDeliveryMode: 'provider_invite',
+    },
+    { provider: 'local' },
+    { autoSaveToProvider: true }
+  );
+  assert.equal(localContextDraft.scope, 'internal');
+  assert.equal(localContextDraft.inviteTargetProvider, '');
+  assert.equal(localContextDraft.inviteTargetAccountId, '');
+  assert.equal(localContextDraft.inviteTargetCalendarId, '');
+  assert.equal(localContextDraft.inviteDeliveryMode, 'local_only');
+
   const internalPayload = eventDraft.buildEventPayloadFromDraft(
     {
       ...internalDraft,
@@ -643,6 +848,150 @@ function testEventScopeHelpers() {
     visibility: 'private',
   });
   assert.equal(hydratedPrivatePersonalDraft.scope, 'internal');
+}
+
+function testCalendarGroupingHelpers() {
+  const sources = [
+    {
+      sourceId: 'source_google_family',
+      provider: 'google',
+      displayName: 'Family',
+      remoteCalendarId: 'family',
+    },
+    {
+      sourceId: 'source_outlook_work',
+      provider: 'microsoft',
+      displayName: 'Work',
+      remoteCalendarId: 'work',
+    },
+  ];
+  const events = [
+    { id: 'local_event', title: 'Local' },
+    {
+      id: 'google_event',
+      title: 'Google',
+      externalProviderLinks: [{ sourceId: 'source_google_family' }],
+    },
+    {
+      id: 'outlook_event',
+      title: 'Outlook',
+      externalProviderLinks: [{ sourceId: 'source_outlook_work' }],
+    },
+  ];
+
+  const groups = calendarGrouping.groupEventsByCalendar(events, sources);
+  assert.deepEqual(
+    groups.map((group) => [group.id, group.label, group.events.map((event) => event.id)]),
+    [
+      ['local', 'Local calendar', ['local_event']],
+      ['source_google_family', 'Family', ['google_event']],
+      ['source_outlook_work', 'Work', ['outlook_event']],
+    ]
+  );
+  assert.equal(calendarGrouping.shouldSplitCalendarGroups(groups, 'split'), true);
+  assert.equal(calendarGrouping.shouldSplitCalendarGroups(groups, 'combined'), false);
+}
+
+function createTimedEvent(id, startTime, endTime) {
+  return {
+    id,
+    startsAt: `2026-04-16T${startTime}:00.000Z`,
+    endsAt: `2026-04-16T${endTime}:00.000Z`,
+  };
+}
+
+function summarizePackedEvents(events) {
+  return eventPacking
+    .packTimedEvents(events)
+    .map((item) => [item.event.id, item.columnIndex, item.columnCount]);
+}
+
+function testResponsiveEventPackingHelpers() {
+  assert.deepEqual(
+    summarizePackedEvents([
+      createTimedEvent('a', '09:00', '10:00'),
+      createTimedEvent('b', '10:00', '11:00'),
+    ]),
+    [
+      ['a', 0, 1],
+      ['b', 0, 1],
+    ]
+  );
+
+  assert.deepEqual(
+    summarizePackedEvents([
+      createTimedEvent('a', '09:00', '10:00'),
+      createTimedEvent('b', '09:30', '10:30'),
+    ]),
+    [
+      ['a', 0, 2],
+      ['b', 1, 2],
+    ]
+  );
+
+  assert.deepEqual(
+    summarizePackedEvents([
+      createTimedEvent('a', '09:00', '10:00'),
+      createTimedEvent('b', '09:15', '09:45'),
+      createTimedEvent('c', '09:30', '10:30'),
+    ]),
+    [
+      ['a', 0, 3],
+      ['b', 1, 3],
+      ['c', 2, 3],
+    ]
+  );
+
+  const sources = [
+    { sourceId: 'google_family', displayName: 'Family', provider: 'google' },
+    { sourceId: 'google_work', displayName: 'Work', provider: 'google' },
+  ];
+  const events = [
+    {
+      ...createTimedEvent('family_a', '09:00', '10:00'),
+      externalProviderLinks: [{ sourceId: 'google_family' }],
+    },
+    {
+      ...createTimedEvent('family_b', '09:30', '10:30'),
+      externalProviderLinks: [{ sourceId: 'google_family' }],
+    },
+    {
+      ...createTimedEvent('work_a', '09:00', '10:00'),
+      externalProviderLinks: [{ sourceId: 'google_work' }],
+    },
+  ];
+  const groups = calendarGrouping.groupEventsByCalendar(events, sources);
+  assert.deepEqual(
+    groups.map((group) => [
+      group.id,
+      eventPacking.packTimedEvents(group.events).map((item) => [
+        item.event.id,
+        item.columnIndex,
+        item.columnCount,
+      ]),
+    ]),
+    [
+      [
+        'google_family',
+        [
+          ['family_a', 0, 2],
+          ['family_b', 1, 2],
+        ],
+      ],
+      ['google_work', [['work_a', 0, 1]]],
+    ]
+  );
+
+  assert.deepEqual(
+    eventPacking.getMonthVisibleEvents(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => ({ id })),
+      6
+    ),
+    {
+      visibleEvents: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ id })),
+      hiddenCount: 1,
+    }
+  );
 }
 
 function testFlexibleDurationAndAllDayDrafts() {
@@ -1495,6 +1844,70 @@ function testHostedEnvelopeProjection() {
   }
 }
 
+function testHostedShareProjectionSanitizesBusyOnly() {
+  const fixture = createStoreFixture('calendar-store-share-projection-');
+
+  try {
+    fixture.store.createEvent({
+      title: 'Visible strategy',
+      description: 'Sensitive notes',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      location: 'Board room',
+      people: ['private@example.com'],
+      startsAt: '2026-04-22T09:00:00.000Z',
+      endsAt: '2026-04-22T10:00:00.000Z',
+      isAllDay: false,
+      color: '#4f9d69',
+      tags: [{ label: 'Secret', color: '#ef4444' }],
+      syncPolicy: 'google_sync',
+      visibility: 'busy_only',
+    });
+    fixture.store.createEvent({
+      title: 'Private local event',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      startsAt: '2026-04-22T11:00:00.000Z',
+      endsAt: '2026-04-22T12:00:00.000Z',
+      isAllDay: false,
+      color: '#64748b',
+      syncPolicy: 'internal_only',
+      visibility: 'private',
+    });
+
+    const projection = fixture.store.buildCalendarShareProjection({
+      privacyLevel: 'busy_only',
+      scope: {
+        calendarIds: [],
+        includePrivate: false,
+      },
+    });
+
+    assert.equal(projection.version, 'calendar-share-v1');
+    assert.equal(projection.privacyLevel, 'busy_only');
+    assert.equal(projection.events.length, 1);
+    assert.equal(projection.events[0].title, 'Busy');
+    assert.equal(projection.events[0].location, undefined);
+    assert.equal(projection.events[0].people, undefined);
+    assert.equal(projection.events[0].description, undefined);
+    assert.equal(projection.events[0].tags, undefined);
+    assert.equal(projection.events[0].color, '#111827');
+
+    const titlesProjection = fixture.store.buildCalendarShareProjection({
+      privacyLevel: 'titles_only',
+      scope: { includePrivate: false },
+    });
+    assert.equal(titlesProjection.events[0].title, 'Visible strategy');
+    assert.equal(titlesProjection.events[0].location, undefined);
+  } finally {
+    fixture.cleanup();
+  }
+}
+
 async function testReminderServiceDispatch() {
   const fixture = createStoreFixture('calendar-store-reminder-service-');
 
@@ -1665,9 +2078,20 @@ async function testOutboundProviderInviteFlow() {
           url: 'https://outlook.office.com/calendar/item/1',
         };
       }
-      assert.deepEqual(input.attendees, ['alex@example.com']);
       assert.equal(input.accountId, account.accountId);
       assert.equal(input.remoteCalendarId, calendar.remoteCalendarId);
+      if (input.event.title === 'Provider no guests') {
+        assert.deepEqual(input.attendees, []);
+        return {
+          accountId: account.accountId,
+          provider: 'google',
+          remoteCalendarId: calendar.remoteCalendarId,
+          remoteEventId: 'google_event_no_guests',
+          remoteVersion: 'v1',
+          url: 'https://calendar.google.com/event?eid=no-guests',
+        };
+      }
+      assert.deepEqual(input.attendees, ['alex@example.com']);
       return {
         accountId: account.accountId,
         provider: 'google',
@@ -1733,6 +2157,39 @@ async function testOutboundProviderInviteFlow() {
     assert.equal(createdLinks.length, 1);
     assert.equal(createdLinks[0].remoteEventId, 'google_event_1');
     assert.equal(createdLinks[0].linkMode, 'outbound');
+
+    const noGuestSnapshot = await fixture.store.createEvent({
+      title: 'Provider no guests',
+      description: 'Create on Google without guests',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      people: [],
+      inviteRecipients: [],
+      startsAt: '2026-04-22T11:00:00.000Z',
+      endsAt: '2026-04-22T12:00:00.000Z',
+      color: '#4f9d69',
+      syncPolicy: 'google_sync',
+      visibility: 'busy_only',
+      inviteTargetAccountId: account.accountId,
+      inviteTargetProvider: 'google',
+      inviteTargetCalendarId: calendar.remoteCalendarId,
+      inviteDeliveryMode: 'provider_invite',
+    });
+    const noGuestEvent = noGuestSnapshot.events.find(
+      (event) => event.title === 'Provider no guests'
+    );
+    assert.equal(noGuestEvent.externalProviderLinks[0].externalEventId, 'google_event_no_guests');
+    assert.equal(
+      calls.some(
+        (call) =>
+          call.kind === 'create' &&
+          call.input.event.title === 'Provider no guests' &&
+          call.input.attendees.length === 0
+      ),
+      true
+    );
 
     const updatedSnapshot = await fixture.store.updateEvent({
       id: createdEvent.id,
@@ -1889,6 +2346,16 @@ async function testExternalCalendarImportRefreshAndDetach() {
     assert.equal(result.snapshot.events.length, 2);
     assert.equal(result.snapshot.externalCalendarSources.length, 1);
     assert.equal(result.snapshot.externalEventLinks.length, 2);
+    const hiddenSnapshot = fixture.store.setExternalCalendarSourceSelected({
+      sourceId: result.source.sourceId,
+      selected: false,
+    });
+    assert.equal(hiddenSnapshot.externalCalendarSources[0].selected, false);
+    const visibleSnapshot = fixture.store.setExternalCalendarSourceSelected({
+      sourceId: result.source.sourceId,
+      selected: true,
+    });
+    assert.equal(visibleSnapshot.externalCalendarSources[0].selected, true);
     assert.equal(
       result.snapshot.events.find((event) => event.title === 'Imported B title that stays long')
         ?.isAllDay,
@@ -1903,6 +2370,8 @@ async function testExternalCalendarImportRefreshAndDetach() {
     const importedB = result.snapshot.events.find(
       (event) => event.title === 'Imported B title that stays long'
     );
+    assert.equal(importedA.externalProviderLinks[0].sourceId, result.source.sourceId);
+    assert.equal(importedB.externalProviderLinks[0].sourceId, result.source.sourceId);
     assert.equal(importedB.title.length > EVENT_TITLE_MAX_LENGTH, true);
     fixture.store.updateEvent({
       id: importedA.id,
@@ -2175,11 +2644,13 @@ function testLocalTransportSession() {
 
 function testOAuthClientConfigPersistence() {
   const previousGoogleClientId = process.env.CALENDAR_GOOGLE_CLIENT_ID;
+  const previousGoogleClientSecret = process.env.CALENDAR_GOOGLE_CLIENT_SECRET;
   const previousGoogleRedirectUri = process.env.CALENDAR_GOOGLE_REDIRECT_URI;
   const previousMicrosoftClientId = process.env.CALENDAR_MICROSOFT_CLIENT_ID;
   const previousMicrosoftRedirectUri = process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
   const previousMicrosoftAuthority = process.env.CALENDAR_MICROSOFT_AUTHORITY;
   delete process.env.CALENDAR_GOOGLE_CLIENT_ID;
+  delete process.env.CALENDAR_GOOGLE_CLIENT_SECRET;
   delete process.env.CALENDAR_GOOGLE_REDIRECT_URI;
   delete process.env.CALENDAR_MICROSOFT_CLIENT_ID;
   delete process.env.CALENDAR_MICROSOFT_REDIRECT_URI;
@@ -2199,6 +2670,7 @@ function testOAuthClientConfigPersistence() {
     const updated = fixture.store.updateOAuthClientConfig({
       google: {
         clientId: 'google-client-id.apps.googleusercontent.com',
+        clientSecret: 'google-client-secret',
         redirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
       },
       microsoft: {
@@ -2210,6 +2682,9 @@ function testOAuthClientConfigPersistence() {
 
     assert.equal(updated.security.auth.clientConfig.google.clientIdConfigured, true);
     assert.equal(updated.security.auth.clientConfig.google.clientIdSource, 'settings');
+    assert.equal(updated.security.auth.clientConfig.google.clientSecretConfigured, true);
+    assert.equal(updated.security.auth.clientConfig.google.clientSecretSource, 'settings');
+    assert.equal(updated.security.auth.clientConfig.google.clientSecret, undefined);
     assert.equal(updated.security.auth.clientConfig.microsoft.clientIdConfigured, true);
     assert.equal(updated.security.auth.clientConfig.microsoft.authority, 'consumers');
     assert.equal(updated.security.auth.clientConfig.microsoft.defaultAuthority, 'common');
@@ -2228,6 +2703,10 @@ function testOAuthClientConfigPersistence() {
     assert.equal(
       fixture.store.oauthService.getProviderConfig('microsoft').tokenUrl,
       'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
+    );
+    assert.equal(
+      fixture.store.oauthService.getProviderConfig('google').clientSecret,
+      'google-client-secret'
     );
 
     assert.throws(
@@ -2254,6 +2733,11 @@ function testOAuthClientConfigPersistence() {
       delete process.env.CALENDAR_GOOGLE_CLIENT_ID;
     } else {
       process.env.CALENDAR_GOOGLE_CLIENT_ID = previousGoogleClientId;
+    }
+    if (previousGoogleClientSecret === undefined) {
+      delete process.env.CALENDAR_GOOGLE_CLIENT_SECRET;
+    } else {
+      process.env.CALENDAR_GOOGLE_CLIENT_SECRET = previousGoogleClientSecret;
     }
     if (previousGoogleRedirectUri === undefined) {
       delete process.env.CALENDAR_GOOGLE_REDIRECT_URI;
@@ -2377,9 +2861,15 @@ async function main() {
     ['developer_mode_preference_and_debug_redaction', testDeveloperModePreferenceAndDebugRedaction],
     ['click_intent_helpers', testClickIntentHelpers],
     ['composer_routing_helpers', testComposerRoutingHelpers],
+    ['calendar_context_persistence_helpers', testCalendarContextPersistenceHelpers],
+    ['popover_positioning_helpers', testPopoverPositioningHelpers],
     ['month_tile_month_labels', testMonthTileMonthLabels],
+    ['month_tiles_keep_all_same_day_events', testMonthTilesKeepAllSameDayEvents],
+    ['header_date_range_formatting', testHeaderDateRangeFormatting],
     ['keyboard_navigation_helpers', testKeyboardNavigationHelpers],
     ['event_scope_helpers', testEventScopeHelpers],
+    ['calendar_grouping_helpers', testCalendarGroupingHelpers],
+    ['responsive_event_packing_helpers', testResponsiveEventPackingHelpers],
     ['flexible_duration_and_all_day_drafts', testFlexibleDurationAndAllDayDrafts],
     ['reminder_helpers_and_validation', testReminderHelpersAndValidation],
     ['encrypted_at_rest', testEncryptedAtRest],
@@ -2390,6 +2880,7 @@ async function main() {
     ['new_store_starts_without_demo_seed', testNewStoreStartsWithoutDemoSeed],
     ['legacy_demo_seed_cleanup', testLegacyDemoSeedCleanup],
     ['hosted_envelope_projection', testHostedEnvelopeProjection],
+    ['hosted_share_projection_sanitizes_busy_only', testHostedShareProjectionSanitizesBusyOnly],
     ['external_calendar_import_refresh_and_detach', testExternalCalendarImportRefreshAndDetach],
     ['outbound_provider_invite_flow', testOutboundProviderInviteFlow],
     ['bundle_and_ics_import_export', testBundleAndIcsImportExport],

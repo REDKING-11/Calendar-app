@@ -158,7 +158,7 @@ export function buildMonthTiles(
       events: (
         eventDateIndex?.byDay?.get(getDateKey(date)) ||
         events.filter((event) => isEventOnDate(event, date))
-      ).slice(0, 2),
+      ),
     };
   });
 }

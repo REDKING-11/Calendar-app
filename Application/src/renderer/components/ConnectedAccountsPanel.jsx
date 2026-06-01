@@ -7,6 +7,9 @@ const DEFAULT_OAUTH_CLIENT_CONFIG = {
     clientId: '',
     clientIdConfigured: false,
     clientIdSource: '',
+    clientSecret: '',
+    clientSecretConfigured: false,
+    clientSecretSource: '',
     redirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
     redirectUriSource: 'default',
     defaultRedirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
@@ -91,6 +94,7 @@ function buildConfigDraft(oauthClientConfig = {}) {
         providerId,
         {
           clientId: providerConfig.clientId || '',
+          clientSecret: '',
           redirectUri: providerConfig.redirectUri || providerConfig.defaultRedirectUri || '',
           authority: providerConfig.authority || providerConfig.defaultAuthority || '',
         },
@@ -130,11 +134,13 @@ function formatCalendarImportResult(result = {}) {
 
 function getCalendarAccessLabel(calendar = {}) {
   const accessRole = String(calendar.accessRole || '').trim();
+  const visibilityLabel = calendar.hidden ? 'Hidden in Google' : '';
   if (!accessRole) {
-    return 'Provider calendar';
+    return visibilityLabel || 'Provider calendar';
   }
 
-  return `${accessRole.charAt(0).toUpperCase()}${accessRole.slice(1)} access`;
+  const accessLabel = `${accessRole.charAt(0).toUpperCase()}${accessRole.slice(1)} access`;
+  return visibilityLabel ? `${accessLabel} - ${visibilityLabel}` : accessLabel;
 }
 
 export default function ConnectedAccountsPanel({
@@ -347,10 +353,9 @@ export default function ConnectedAccountsPanel({
           <div>
             <p className="settings-section-eyebrow">OAuth setup</p>
             <p className="notification-helper-copy">
-              Add public desktop OAuth client IDs once. Connect saves the current setup first, then
+              Add desktop OAuth client details once. Connect saves the current setup first, then
               opens browser sign-in. Redirect URIs must match your Google Cloud / Azure app
-              settings. These settings identify the app to Google or Microsoft; they do not grant
-              Calendar App a client secret.
+              settings. These settings identify Calendar App to Google or Microsoft.
             </p>
           </div>
           <button
@@ -413,7 +418,34 @@ export default function ConnectedAccountsPanel({
                       handleSetupFieldChange(provider.id, 'clientId', event.target.value)
                     }
                   />
+                  {provider.id === 'google' ? (
+                    <span className="settings-field-copy">
+                      Use the Google Desktop app client ID from the OAuth client details.
+                    </span>
+                  ) : null}
                 </label>
+                {provider.id === 'google' ? (
+                  <label className="settings-field">
+                    <span>Google client secret</span>
+                    <input
+                      type="password"
+                      className="app-input"
+                      value={providerDraft.clientSecret || ''}
+                      placeholder={
+                        provider.clientConfig.clientSecretConfigured
+                          ? 'Saved encrypted - leave blank to keep'
+                          : 'Desktop app client secret'
+                      }
+                      onChange={(event) =>
+                        handleSetupFieldChange(provider.id, 'clientSecret', event.target.value)
+                      }
+                    />
+                    <span className="settings-field-copy">
+                      Google Desktop OAuth clients can include a generated client secret. Calendar
+                      App stores it encrypted and only sends it to Google during token exchange.
+                    </span>
+                  </label>
+                ) : null}
                 <label className="settings-field">
                   <span>Redirect URI</span>
                   <input
@@ -521,8 +553,8 @@ export default function ConnectedAccountsPanel({
                   <li>Open Google Cloud Console and create or choose the project for this calendar app.</li>
                   <li>If Google asks for it, configure the OAuth consent screen. While the app is in testing, add your Google account as a test user.</li>
                   <li>Open the API Library and enable Google Calendar API. Gmail API / Gmail send access is only needed when you want email reminders.</li>
-                  <li>Open OAuth clients / Credentials and create an OAuth client ID for an installed, native, or desktop app. Do not use a service account for personal calendar sign-in.</li>
-                  <li>Copy only the OAuth client ID. Do not paste the client secret.</li>
+                  <li>Open OAuth clients / Credentials and create an OAuth client ID with application type Desktop app. Do not choose Web application, and do not use a service account for personal calendar sign-in.</li>
+                  <li>Copy the OAuth client ID and client secret from the Desktop app client details.</li>
                   <li>Add or keep this exact redirect URI in Calendar App: <code className="break-all text-[var(--text-primary)]">http://127.0.0.1:45781/oauth/google/callback</code></li>
                   <li>Paste the client ID into Calendar App, then press Connect Google. Calendar App saves the setup automatically before opening browser sign-in.</li>
                 </ol>
@@ -600,9 +632,7 @@ export default function ConnectedAccountsPanel({
             </div>
 
             <div className="rounded-[18px] border border-[color-mix(in_srgb,var(--warning-text)_42%,var(--border-color))] bg-[color-mix(in_srgb,var(--warning-text)_10%,var(--surface-secondary))] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">
-              <strong className="text-[var(--text-primary)]">What to paste:</strong> paste only public client IDs. Never paste client secrets,
-              refresh tokens, authorization codes, exported app data with tokens, tenant secrets, or
-              certificate values. Calendar App is designed to stay client-secret-free.
+              <strong className="text-[var(--text-primary)]">What to paste:</strong> paste public client IDs. For Google Desktop clients, paste the generated desktop client secret if Google requires it. Never paste refresh tokens, authorization codes, exported app data with tokens, tenant secrets, or certificate values.
             </div>
 
             <div className="rounded-[18px] border border-[var(--border-color)] bg-[var(--surface-secondary)] px-4 py-3.5 text-[0.9rem] leading-[1.55] text-[var(--text-secondary)]">

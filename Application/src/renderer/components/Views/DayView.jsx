@@ -4,7 +4,9 @@ import CalendarViewHeader from './CalendarViewHeader';
 import SelectedDayDetails from './SelectedDayDetails';
 import TodayScheduleControl from './TodayScheduleControl';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
+import { groupEventsByCalendar, shouldSplitCalendarGroups } from '../../calendarGrouping';
 import { createClickIntentRouter } from '../../clickIntent';
+import { buildPackedEventMap, getPackedEventStyle } from '../../eventPacking';
 import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
 const ZOOM_LEVELS = [
@@ -155,6 +157,7 @@ export default function DayView({
   headerRef,
   events,
   eventDateIndex,
+  externalCalendarSources = [],
   todayEvents,
   preferences,
   selectedDate,
@@ -211,6 +214,10 @@ export default function DayView({
         }))
         .filter((item) => item.layout),
     [dayEvents, windowState.startMinutes, windowState.endMinutes, zoomConfig.pixelsPerHour]
+  );
+  const visibleLayoutByEventId = useMemo(
+    () => new Map(visibleDayEvents.map((item) => [item.event.id, item.layout])),
+    [visibleDayEvents]
   );
   const currentMinutes = (() => {
     const now = new Date();
@@ -450,34 +457,82 @@ export default function DayView({
             </div>
 
             <div className="day-event-layer">
-              {visibleDayEvents.map(({ event, layout }) => (
-                <button
-                  key={event.id}
-                  type="button"
-                  className={`day-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
-                  style={{
-                    top: `${layout.top}px`,
-                    height: `${layout.height}px`,
-                    backgroundColor: event.color || '#4f9d69',
-                  }}
-                  onClick={(clickEvent) =>
-                    eventClickRouterRef.current.handleSingle({
-                      event,
-                      anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
-                    })
-                  }
-                  onDoubleClick={() =>
-                    eventClickRouterRef.current.handleDouble({
-                      event,
-                    })
-                  }
-                  onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
-                >
-                  <p className="calendar-event-card-title">{event.title}</p>
-                  <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
-                  <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
-                </button>
-              ))}
+              {(() => {
+                const groups = groupEventsByCalendar(
+                  visibleDayEvents.map((item) => item.event),
+                  externalCalendarSources
+                );
+                const isSplit = shouldSplitCalendarGroups(groups, preferences?.calendarSplitMode);
+                const renderGroups = isSplit
+                  ? groups
+                  : [{ id: 'combined', label: '', events: visibleDayEvents.map((item) => item.event) }];
+
+                return renderGroups.map((group, groupIndex) => (
+                  <div
+                    key={group.id}
+                    className="day-calendar-lane"
+                    style={{
+                      left: isSplit ? `${(groupIndex / renderGroups.length) * 100}%` : '0%',
+                      width: isSplit ? `${100 / renderGroups.length}%` : '100%',
+                    }}
+                  >
+                    {isSplit ? (
+                      <div className="day-calendar-lane-label" style={{ borderColor: group.color }}>
+                        {group.label}
+                      </div>
+                    ) : null}
+                    {(() => {
+                      const packedEventMap = buildPackedEventMap(group.events);
+
+                      return group.events.map((event) => {
+                        const layout = visibleLayoutByEventId.get(event.id);
+                        if (!layout) {
+                          return null;
+                        }
+                        const packed = packedEventMap.get(event.id);
+                        const packedStyle = getPackedEventStyle(packed, 8);
+
+                        return (
+                          <button
+                            key={event.id}
+                            type="button"
+                            className={[
+                              'day-event-block',
+                              isSplit ? 'day-event-block--split' : '',
+                              packed?.columnCount > 1 ? 'day-event-block--packed calendar-event-card--narrow' : '',
+                              isFocusEvent(event) ? 'calendar-event-card--focus' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            style={{
+                              top: `${layout.top}px`,
+                              height: `${layout.height}px`,
+                              ...packedStyle,
+                              backgroundColor: event.color || group.color || '#4f9d69',
+                            }}
+                            onClick={(clickEvent) =>
+                              eventClickRouterRef.current.handleSingle({
+                                event,
+                                anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                              })
+                            }
+                            onDoubleClick={() =>
+                              eventClickRouterRef.current.handleDouble({
+                                event,
+                              })
+                            }
+                            onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
+                          >
+                            <p className="calendar-event-card-title">{event.title}</p>
+                            <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
+                            <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
+                          </button>
+                        );
+                      });
+                    })()}
+                  </div>
+                ));
+              })()}
             </div>
           </div>
 

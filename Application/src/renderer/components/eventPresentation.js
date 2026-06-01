@@ -37,10 +37,10 @@ export function getEventContextLabel(event) {
 
   const scope = resolveDraftScope(event.syncPolicy, event.visibility);
   if (scope === 'work') {
-    return 'Work';
+    return 'Google';
   }
   if (scope === 'personal') {
-    return 'Personal';
+    return 'Outlook';
   }
 
   return getEventTypeLabel(event.type);

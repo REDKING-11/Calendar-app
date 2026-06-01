@@ -7,6 +7,9 @@ export default function Sidebar({
   events,
   eventDateIndex,
   visibleEvents,
+  calendarGroups = [],
+  connectedAccounts = [],
+  externalCalendarSources = [],
   preferences,
   timeZone,
   selectedDate,
@@ -19,10 +22,12 @@ export default function Sidebar({
   activeTagFilters,
   onToggleTagFilter,
   onManageTag,
+  onToggleCalendar,
+  onUseCalendar,
   onClearFilters,
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
-  const [isQuickFiltersOpen, setIsQuickFiltersOpen] = useState(true);
+  const [activeSidebarPanel, setActiveSidebarPanel] = useState('filters');
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
   const [isYearPickerOpen, setIsYearPickerOpen] = useState(false);
   const [tagActionMenu, setTagActionMenu] = useState(null);
@@ -136,6 +141,8 @@ export default function Sidebar({
   }, [tagActionMenu]);
 
   const hasActiveFilters = searchQuery.trim() || activeTagFilters.length > 0;
+  const hasConnectedAccounts = connectedAccounts.length > 0;
+  const importedCalendarCount = externalCalendarSources.length;
 
   const changeViewMonth = (offset) => {
     setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
@@ -196,7 +203,7 @@ export default function Sidebar({
   return (
     <aside
       ref={regionRef}
-      className="sidebar-shell app-panel w-full min-h-0 rounded-[28px] px-4 py-5"
+      className="sidebar-shell app-panel w-full min-h-0 rounded-[20px] px-3 py-4"
       aria-label="Sidebar"
     >
       <div className="flex h-full flex-col">
@@ -209,17 +216,17 @@ export default function Sidebar({
             })
           }
           data-keyboard-focus="sidebar-primary"
-          className="app-button app-button--primary flex items-center justify-between rounded-2xl px-5 py-4 text-left"
+          className="app-button app-button--primary flex items-center justify-between rounded-xl px-3 py-2.5 text-left"
         >
-          <span className="flex items-center gap-3">
-            <span className="text-3xl leading-none">+</span>
-            <span className="text-lg font-semibold">Create</span>
+          <span className="flex items-center gap-2">
+            <span className="text-2xl leading-none">+</span>
+            <span className="text-sm font-semibold">Create</span>
           </span>
-          <span className="text-sm opacity-80">New</span>
+          <span className="text-xs opacity-80">New</span>
         </button>
 
-        <div className="sidebar-mini-calendar mt-10">
-          <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="sidebar-mini-calendar mt-5">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
             <div className="sidebar-period-picker">
               <div className="sidebar-period-control">
                 <div ref={monthPickerRef} className="sidebar-period-segment sidebar-month-picker-anchor">
@@ -357,7 +364,7 @@ export default function Sidebar({
             </div>
           </div>
 
-          <div className="grid grid-cols-7 gap-y-3 text-center text-[12px] font-semibold app-text-soft">
+          <div className="grid grid-cols-7 gap-y-1 text-center text-[10px] font-semibold app-text-soft">
             {weekdayLabels.map((day) => (
               <div key={day} className="py-1">
                 {day[0]}
@@ -374,7 +381,7 @@ export default function Sidebar({
                     type="button"
                     onClick={() => onSelectDate?.(tile.date)}
                     className={[
-                      'sidebar-mini-day mx-auto flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-medium transition',
+                      'sidebar-mini-day mx-auto flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-medium transition',
                       tile.inCurrentMonth
                         ? 'text-[var(--text-primary)]'
                         : 'app-text-soft',
@@ -392,154 +399,275 @@ export default function Sidebar({
           </div>
         </div>
 
-        <div className="mt-6">
+        <div className="mt-4">
           <input
             type="text"
             value={searchQuery}
             onChange={(event) => onSearchQueryChange?.(event.target.value)}
             placeholder="Search events or tags"
             data-keyboard-focus="sidebar-search"
-            className="app-input w-full rounded-xl px-4 py-3 text-[15px]"
+            className="app-input w-full rounded-xl px-3 py-2 text-[13px]"
           />
         </div>
 
-        <div className="mt-8 space-y-8 text-[15px]">
-          <div className="mb-2">
-            <div className="mb-4 flex items-center justify-between font-semibold text-[var(--text-primary)]">
-              <button
-                type="button"
-                onClick={() => setIsQuickFiltersOpen((current) => !current)}
-                className="flex items-center gap-2 text-left transition hover:text-[var(--text-secondary)]"
-              >
-                <span>Quick filters</span>
-                <span className="text-sm app-text-soft">
-                  {isQuickFiltersOpen ? 'Hide' : 'Show'}
-                </span>
-              </button>
+        <div className="mt-5">
+          <div className="mb-3 flex items-center justify-between gap-2 font-semibold text-[var(--text-primary)]">
+            <span>Calendars</span>
+            <span className="sidebar-section-count">{importedCalendarCount}</span>
+          </div>
+          <p className="sidebar-section-copy">
+            Using sets where new events go. Visibility only changes the view.
+          </p>
 
-              {hasActiveFilters ? (
-                <button
-                  type="button"
-                  onClick={onClearFilters}
-                  className="text-sm font-medium app-text-soft transition hover:text-[var(--text-primary)]"
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
+          <div className="sidebar-calendar-groups grid gap-3">
+            {calendarGroups.map((group) => (
+              <section key={group.id} className="sidebar-calendar-group">
+                <div className="sidebar-calendar-group-header">
+                  <div className="min-w-0">
+                    <p className="sidebar-calendar-group-title">
+                      {group.title}
+                    </p>
+                    <p className="sidebar-calendar-provider">
+                      {group.provider === 'microsoft'
+                        ? 'Outlook'
+                        : group.provider === 'google'
+                          ? 'Google'
+                          : 'Local'}
+                    </p>
+                  </div>
+                </div>
 
-            <div
-              className={[
-                'sidebar-quick-filters overflow-hidden transition-all duration-200',
-                isQuickFiltersOpen ? 'max-h-[420px] opacity-100' : 'max-h-0 opacity-0',
-              ].join(' ')}
-            >
-              <div className="mb-4 flex flex-wrap gap-2">
-                {quickFilterOptions.map((option) => {
-                  const isActive = quickFilter === option.id;
-
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => onQuickFilterChange?.(option.id)}
-                      className={[
-                        'rounded-full border px-3 py-2 text-sm font-medium transition',
-                        isActive ? 'app-chip app-chip--active' : 'app-chip',
-                      ].join(' ')}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="space-y-3">
-                {tagFilters.length > 0 ? (
-                  tagFilters.map((item) => {
-                    const isActive = activeTagFilters.includes(item.filterId);
-
-                    return (
-                      <label
-                        key={item.id}
-                        className="flex cursor-pointer items-center gap-3"
-                        onMouseDown={(event) => handleTagMouseDown(event, item)}
-                        onAuxClick={(event) => handleTagAuxClick(event, item)}
-                        title='Middle-click for rename or delete'
+                {group.calendars.length > 0 ? (
+                  <div className="grid gap-1.5">
+                    {group.calendars.map((calendar) => (
+                      <div
+                        key={calendar.id}
+                        className={[
+                          'sidebar-calendar-toggle rounded-xl px-2 py-2 transition',
+                          calendar.active ? 'sidebar-calendar-toggle--active' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        title={`${calendar.active ? 'Using' : 'Use'} ${calendar.label}`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isActive}
-                          onChange={() => onToggleTagFilter?.(item.filterId)}
-                          className="sr-only"
-                        />
-                        <span
-                          className="flex h-5 w-5 items-center justify-center rounded-[4px] text-[12px] font-bold text-white"
-                          style={{ backgroundColor: item.color }}
+                        <button
+                          type="button"
+                          className="sidebar-calendar-use-button"
+                          onClick={() => onUseCalendar?.(calendar)}
                         >
-                          {isActive ? 'x' : ''}
-                        </span>
-                        <span className="text-[15px] text-[var(--text-primary)]">{item.label}</span>
-                      </label>
-                    );
-                  })
+                          <span
+                            className="sidebar-calendar-dot"
+                            style={{ backgroundColor: calendar.color || '#64748b' }}
+                          />
+                          <span className="sidebar-calendar-label-wrap">
+                            <span className="sidebar-calendar-label">{calendar.label}</span>
+                            {calendar.active ? (
+                              <span className="sidebar-calendar-active-badge">Using</span>
+                            ) : null}
+                          </span>
+                        </button>
+                        <div className="sidebar-calendar-actions">
+                          <button
+                            type="button"
+                            className={[
+                              'sidebar-calendar-check',
+                              calendar.visible ? 'sidebar-calendar-check--active' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            style={{
+                              '--calendar-color': calendar.color || '#64748b',
+                            }}
+                            onClick={() => onToggleCalendar?.(calendar)}
+                            aria-label={`${calendar.visible ? 'Hide' : 'Show'} ${calendar.label}`}
+                          >
+                            {calendar.visible ? 'On' : 'Off'}
+                          </button>
+                          <span className="sidebar-calendar-count">{calendar.eventCount}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <p className="text-sm app-text-soft">Add tags to events to filter them here.</p>
+                  <p className="m-0 text-xs app-text-soft">No imported calendars yet.</p>
                 )}
-              </div>
-            </div>
+              </section>
+            ))}
           </div>
 
-          <div className="min-h-0 flex-1">
-            <div className="mb-4 flex items-center justify-between font-semibold text-[var(--text-primary)]">
-              <span>Visible events</span>
-              <span className="text-sm font-medium app-text-soft">{visibleEvents.length}</span>
-            </div>
+          {!hasConnectedAccounts ? (
+            <p className="mt-2 text-xs app-text-soft">
+              Use Local only, or connect an email account to import its calendars.
+            </p>
+          ) : importedCalendarCount === 0 ? (
+            <p className="mt-2 text-xs app-text-soft">
+              Import provider calendars from Settings once, then show or hide them here.
+            </p>
+          ) : null}
+        </div>
 
-            {isQuickFiltersOpen ? (
-              <div className="sidebar-empty-state rounded-2xl border border-dashed px-4 py-4 text-sm app-text-soft">
-                Visible events are hidden while Quick filters is open.
-              </div>
-            ) : (
-              <div className="sidebar-visible-events sidebar-visible-events--expanded space-y-3">
-                {visibleEvents.map((event) => (
-                  <div key={event.id} className="sidebar-visible-events-item">
+        <div className="mt-5 text-[13px]">
+          <div
+            className="sidebar-panel-switch"
+            role="tablist"
+            aria-label="Sidebar panel"
+          >
+            <span
+              className={[
+                'sidebar-panel-switch-indicator',
+                activeSidebarPanel === 'events' ? 'sidebar-panel-switch-indicator--right' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeSidebarPanel === 'filters'}
+              className="sidebar-panel-tab"
+              onClick={() => setActiveSidebarPanel('filters')}
+            >
+              <span>Filters</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeSidebarPanel === 'events'}
+              className="sidebar-panel-tab"
+              onClick={() => setActiveSidebarPanel('events')}
+            >
+              <span>Events</span>
+              <span className="sidebar-panel-count">{visibleEvents.length}</span>
+            </button>
+          </div>
+
+          <div className="sidebar-panel-viewport">
+            <div
+              className={[
+                'sidebar-panel-track',
+                activeSidebarPanel === 'events' ? 'sidebar-panel-track--events' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              <section className="sidebar-panel-pane" aria-hidden={activeSidebarPanel !== 'filters'}>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-[var(--text-primary)]">Filters</span>
+                  {hasActiveFilters ? (
                     <button
                       type="button"
-                      onClick={() => onSelectDate?.(new Date(event.startsAt))}
-                      className="sidebar-visible-event-card w-full rounded-xl px-3 py-3 text-left transition"
+                      onClick={onClearFilters}
+                      className="text-xs font-medium app-text-soft transition hover:text-[var(--text-primary)]"
                     >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-3 w-3 rounded-full"
-                          style={{ backgroundColor: event.color || '#4f9d69' }}
-                        />
-                        <span className="text-sm font-semibold text-[var(--text-primary)]">{event.title}</span>
-                      </div>
-                      <p className="mt-2 text-sm app-text-soft">
-                        {new Date(event.startsAt).toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                        })}{' '}
-                        at{' '}
-                        {new Intl.DateTimeFormat(undefined, {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                          hour12: preferences?.timeFormat === '12h',
-                        }).format(new Date(event.startsAt))}
-                      </p>
+                      Clear
                     </button>
+                  ) : null}
+                </div>
+
+                <div className="sidebar-quick-filters">
+                  <div className="mb-4 flex flex-wrap gap-1.5">
+                    {quickFilterOptions.map((option) => {
+                      const isActive = quickFilter === option.id;
+
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onQuickFilterChange?.(option.id)}
+                          className={[
+                            'rounded-full border px-2.5 py-1.5 text-xs font-medium transition',
+                            isActive ? 'app-chip app-chip--active' : 'app-chip',
+                          ].join(' ')}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-                {visibleEvents.length === 0 ? (
-                  <p className="text-sm app-text-soft">No events match the current filters.</p>
-                ) : null}
-              </div>
-            )}
+
+                  <div className="space-y-2.5">
+                    {tagFilters.length > 0 ? (
+                      tagFilters.map((item) => {
+                        const isActive = activeTagFilters.includes(item.filterId);
+
+                        return (
+                          <label
+                            key={item.id}
+                            className="flex cursor-pointer items-center gap-2"
+                            onMouseDown={(event) => handleTagMouseDown(event, item)}
+                            onAuxClick={(event) => handleTagAuxClick(event, item)}
+                            title='Middle-click for rename or delete'
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isActive}
+                              onChange={() => onToggleTagFilter?.(item.filterId)}
+                              className="sr-only"
+                            />
+                            <span
+                              className="flex h-4 w-4 items-center justify-center rounded-[4px] text-[10px] font-bold text-white"
+                              style={{ backgroundColor: item.color }}
+                            >
+                              {isActive ? 'x' : ''}
+                            </span>
+                            <span className="min-w-0 truncate text-[13px] text-[var(--text-primary)]">{item.label}</span>
+                          </label>
+                        );
+                      })
+                    ) : (
+                      <p className="text-xs app-text-soft">Add tags to events to filter them here.</p>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="sidebar-panel-pane" aria-hidden={activeSidebarPanel !== 'events'}>
+                <div className="mb-3 flex items-center justify-between font-semibold text-[var(--text-primary)]">
+                  <span>Visible events</span>
+                  <span className="text-sm font-medium app-text-soft">{visibleEvents.length}</span>
+                </div>
+
+                <div className="sidebar-visible-events sidebar-visible-events--expanded space-y-3">
+                  {visibleEvents.map((event) => (
+                    <div key={event.id} className="sidebar-visible-events-item">
+                      <button
+                        type="button"
+                        onClick={() => onSelectDate?.(new Date(event.startsAt))}
+                        className="sidebar-visible-event-card w-full rounded-xl px-2.5 py-2.5 text-left transition"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-3 w-3 rounded-full"
+                            style={{ backgroundColor: event.color || '#4f9d69' }}
+                          />
+                          <span className="min-w-0 truncate text-xs font-semibold text-[var(--text-primary)]">{event.title}</span>
+                        </div>
+                        <p className="mt-1.5 text-xs app-text-soft">
+                          {new Date(event.startsAt).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })}{' '}
+                          at{' '}
+                          {new Intl.DateTimeFormat(undefined, {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: preferences?.timeFormat === '12h',
+                          }).format(new Date(event.startsAt))}
+                        </p>
+                      </button>
+                    </div>
+                  ))}
+                  {visibleEvents.length === 0 ? (
+                    <p className="text-xs app-text-soft">No events match the current filters.</p>
+                  ) : null}
+                </div>
+              </section>
+            </div>
           </div>
         </div>
 
-        <div className="mt-auto pt-10 text-sm app-text-soft">Terms - Privacy</div>
+        <div className="mt-auto pt-6 text-xs app-text-soft">Terms - Privacy</div>
       </div>
       {tagActionMenu ? (
         <div

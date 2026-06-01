@@ -75,6 +75,272 @@ function AppInfoCard({ snapshot, effectiveTheme, preferences }) {
   );
 }
 
+const SHARE_PRIVACY_OPTIONS = [
+  { id: 'busy_only', label: 'Busy only' },
+  { id: 'titles_only', label: 'Titles only' },
+  { id: 'full_details', label: 'Full details' },
+];
+
+function HostedSharePanel({
+  hosted,
+  externalCalendarSources = [],
+  onListShares,
+  onCreateShare,
+  onRevokeShare,
+  onPublishShare,
+}) {
+  const [shares, setShares] = useState([]);
+  const [draft, setDraft] = useState({
+    name: 'Shared availability',
+    privacyLevel: 'busy_only',
+    calendarIds: [],
+    dateFrom: '',
+    dateTo: '',
+    expiresAt: '',
+  });
+  const [busyAction, setBusyAction] = useState('');
+  const [message, setMessage] = useState('');
+  const hostedConnected = hosted?.connectionStatus === 'connected';
+  const calendars = [
+    { id: 'local', label: 'Local calendar', provider: 'local' },
+    ...externalCalendarSources.map((source) => ({
+      id: source.sourceId,
+      label: source.displayName || source.remoteCalendarId || 'Provider calendar',
+      provider: source.provider,
+    })),
+  ];
+
+  const refreshShares = async () => {
+    if (!hostedConnected || !onListShares) {
+      return;
+    }
+    setBusyAction('list');
+    setMessage('');
+    try {
+      const result = await onListShares();
+      setShares(result?.shares || []);
+    } catch (error) {
+      setMessage(error?.message || 'Shared calendars could not be loaded.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  useEffect(() => {
+    refreshShares();
+  }, [hostedConnected]);
+
+  const toggleCalendar = (calendarId) => {
+    setDraft((current) => {
+      const selected = new Set(current.calendarIds);
+      if (selected.has(calendarId)) {
+        selected.delete(calendarId);
+      } else {
+        selected.add(calendarId);
+      }
+      return { ...current, calendarIds: Array.from(selected) };
+    });
+  };
+
+  const buildShareInput = () => ({
+    name: draft.name,
+    privacyLevel: draft.privacyLevel,
+    expiresAt: draft.expiresAt || null,
+    scope: {
+      calendarIds: draft.calendarIds,
+      dateFrom: draft.dateFrom || null,
+      dateTo: draft.dateTo || null,
+      includePrivate: false,
+    },
+  });
+
+  const handleCreate = async () => {
+    setBusyAction('create');
+    setMessage('');
+    try {
+      const share = await onCreateShare?.(buildShareInput());
+      setShares((current) => [share, ...current]);
+      setMessage(share?.url ? `Share link created: ${share.url}` : 'Share link created.');
+    } catch (error) {
+      setMessage(error?.message || 'Share link could not be created.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handlePublish = async (share) => {
+    setBusyAction(`publish:${share.id}`);
+    setMessage('');
+    try {
+      const updated = await onPublishShare?.({
+        shareId: share.id,
+        privacyLevel: share.privacyLevel,
+        scope: share.scope || {},
+      });
+      setShares((current) =>
+        current.map((item) => (item.id === updated.id ? { ...updated, url: updated.url || item.url } : item))
+      );
+      setMessage('Shared calendar published.');
+    } catch (error) {
+      setMessage(error?.message || 'Shared calendar could not be published.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleRevoke = async (share) => {
+    setBusyAction(`revoke:${share.id}`);
+    setMessage('');
+    try {
+      const updated = await onRevokeShare?.(share.id);
+      setShares((current) =>
+        current.map((item) => (item.id === updated.id ? { ...updated, url: updated.url || item.url } : item))
+      );
+      setMessage('Share link revoked.');
+    } catch (error) {
+      setMessage(error?.message || 'Share link could not be revoked.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  if (!hostedConnected) {
+    return (
+      <div className="settings-subcard">
+        <p className="settings-stat-label">Hosted sharing</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+          Sign in to SelfHdb hosted sync before creating public calendar view links.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="settings-subcard">
+        <p className="settings-stat-label">New share link</p>
+        <div className="settings-form-grid mt-3">
+          <label className="settings-field">
+            <span>Name</span>
+            <input
+              className="app-input"
+              value={draft.name}
+              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="settings-field">
+            <span>Privacy</span>
+            <select
+              className="app-input"
+              value={draft.privacyLevel}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, privacyLevel: event.target.value }))
+              }
+            >
+              {SHARE_PRIVACY_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>From</span>
+            <input
+              className="app-input"
+              type="date"
+              value={draft.dateFrom}
+              onChange={(event) => setDraft((current) => ({ ...current, dateFrom: event.target.value }))}
+            />
+          </label>
+          <label className="settings-field">
+            <span>To</span>
+            <input
+              className="app-input"
+              type="date"
+              value={draft.dateTo}
+              onChange={(event) => setDraft((current) => ({ ...current, dateTo: event.target.value }))}
+            />
+          </label>
+          <label className="settings-field">
+            <span>Expires</span>
+            <input
+              className="app-input"
+              type="date"
+              value={draft.expiresAt}
+              onChange={(event) => setDraft((current) => ({ ...current, expiresAt: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="share-calendar-picker">
+          {calendars.map((calendar) => (
+            <label key={calendar.id} className="settings-toggle settings-toggle--compact">
+              <input
+                type="checkbox"
+                checked={draft.calendarIds.includes(calendar.id)}
+                onChange={() => toggleCalendar(calendar.id)}
+              />
+              <span>{calendar.label}</span>
+            </label>
+          ))}
+        </div>
+        <p className="settings-field-copy">
+          Leave all calendars unchecked to include every visible share-eligible calendar. Private/local-only events stay hidden.
+        </p>
+        <button
+          type="button"
+          className="app-button app-button--primary mt-3"
+          disabled={busyAction === 'create'}
+          onClick={handleCreate}
+        >
+          {busyAction === 'create' ? 'Creating...' : 'Create view link'}
+        </button>
+      </div>
+
+      <div className="grid gap-2">
+        {shares.map((share) => (
+          <div key={share.id} className="settings-subcard">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="m-0 font-bold text-[var(--text-primary)]">{share.name}</p>
+                <p className="notification-helper-copy m-0">
+                  {share.privacyLevel} {share.revokedAt ? '- revoked' : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="app-button app-button--secondary"
+                  disabled={Boolean(share.revokedAt) || busyAction === `publish:${share.id}`}
+                  onClick={() => handlePublish(share)}
+                >
+                  {busyAction === `publish:${share.id}` ? 'Publishing...' : 'Publish now'}
+                </button>
+                <button
+                  type="button"
+                  className="app-button app-button--secondary"
+                  disabled={Boolean(share.revokedAt) || busyAction === `revoke:${share.id}`}
+                  onClick={() => handleRevoke(share)}
+                >
+                  {busyAction === `revoke:${share.id}` ? 'Revoking...' : 'Revoke'}
+                </button>
+              </div>
+            </div>
+            {share.url ? <p className="share-url">{share.url}</p> : null}
+            <p className="notification-helper-copy m-0">
+              Last published: {share.projectionUpdatedAt || 'not published yet'}
+            </p>
+          </div>
+        ))}
+        {shares.length === 0 ? (
+          <p className="notification-helper-copy">No shared calendar links yet.</p>
+        ) : null}
+      </div>
+      {message ? <p className="notification-helper-copy">{message}</p> : null}
+    </div>
+  );
+}
+
 function DeveloperDiagnosticsCard({ debugSnapshot }) {
   if (!debugSnapshot?.app?.developerMode) {
     return null;
@@ -157,6 +423,10 @@ export default function SettingsWindow({
   onSyncHostedNow,
   onDisconnectHostedSync,
   onExportHostedEnv,
+  onListHostedShares,
+  onCreateHostedShare,
+  onRevokeHostedShare,
+  onPublishHostedShare,
   hostedBusyAction,
   hostedStatusMessage,
   connectedAccounts = [],
@@ -530,6 +800,22 @@ export default function SettingsWindow({
               </select>
             </label>
             <label className="settings-field">
+              <span>Calendar layout</span>
+              <select
+                className="app-input"
+                value={preferences.calendarSplitMode || 'split'}
+                onChange={(event) =>
+                  updatePreference(setPreferences, { calendarSplitMode: event.target.value })
+                }
+              >
+                <option value="split">Split visible calendars</option>
+                <option value="combined">Combine calendars</option>
+              </select>
+              <small className="settings-field-copy">
+                Split layout places visible calendars into side-by-side lanes for clearer busy views.
+              </small>
+            </label>
+            <label className="settings-field">
               <span>Default event duration</span>
               <select
                 className="app-input"
@@ -575,6 +861,22 @@ export default function SettingsWindow({
               />
               <span>Show completed tasks in calendar views</span>
             </label>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={preferences.autoSaveToSelectedProviderCalendar !== false}
+                onChange={(event) =>
+                  updatePreference(setPreferences, {
+                    autoSaveToSelectedProviderCalendar: event.target.checked,
+                  })
+                }
+              />
+              <span>Automatically save new events to the selected Google/Outlook calendar</span>
+            </label>
+            <p className="settings-field-copy m-0">
+              When the sidebar Using calendar is Google or Outlook, new events are created on that
+              provider calendar. Local calendar still saves locally.
+            </p>
           </div>
         </SettingsCard>
 
@@ -599,6 +901,21 @@ export default function SettingsWindow({
           busyAction={hostedBusyAction}
           statusMessage={hostedStatusMessage}
         />
+
+        <SettingsCard
+          eyebrow="Sharing"
+          title="Shared calendar view links"
+          description="Create revocable hosted links that show a privacy-filtered generated calendar."
+        >
+          <HostedSharePanel
+            hosted={hosted}
+            externalCalendarSources={externalCalendarSources}
+            onListShares={onListHostedShares}
+            onCreateShare={onCreateHostedShare}
+            onRevokeShare={onRevokeHostedShare}
+            onPublishShare={onPublishHostedShare}
+          />
+        </SettingsCard>
 
         <AppInfoCard
           snapshot={snapshot}

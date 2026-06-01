@@ -62,6 +62,15 @@ final class Application
             'authMode' => 'local_password',
         ]));
 
+        $router->add('GET', '/v1/share/{token}', function (Request $_request, array $params): void {
+            $share = $this->repository->getPublicCalendarShare((string) $params['token']);
+            if (!$share) {
+                Response::error('share_not_found', 'Share link was not found or is no longer available.', 404);
+            }
+
+            Response::success($share);
+        });
+
         $router->add('POST', '/v1/auth/register', function (Request $request, array $_params): void {
             $this->enforceRateLimit('auth', $request->ipAddress, $this->config->rateLimits['auth'], 60);
             $body = $request->json();
@@ -172,6 +181,47 @@ final class Application
             Response::success($this->repository->exportBundle($auth['user']['id']));
         });
 
+        $router->add('GET', '/v1/shares', function (Request $request, array $_params): void {
+            $auth = $this->requireAuth($request);
+            Response::success([
+                'shares' => array_map(
+                    fn (array $share): array => $this->formatShareForResponse($share),
+                    $this->repository->listCalendarShares($auth['user']['id'])
+                ),
+            ]);
+        });
+
+        $router->add('POST', '/v1/shares', function (Request $request, array $_params): void {
+            $auth = $this->requireAuth($request);
+            $body = $request->json();
+            $share = $this->repository->createCalendarShare($auth['user']['id'], $body);
+            $this->repository->appendAuditLog($auth['user']['id'], $auth['device']['id'], 'share_create', 'calendar_share', $share['id'], $request->ipAddress);
+            Response::success($this->formatShareForResponse($share), null, 201);
+        });
+
+        $router->add('PATCH', '/v1/shares/{id}', function (Request $request, array $params): void {
+            $auth = $this->requireAuth($request);
+            $share = $this->repository->updateCalendarShare($auth['user']['id'], (string) $params['id'], $request->json());
+            $this->repository->appendAuditLog($auth['user']['id'], $auth['device']['id'], 'share_update', 'calendar_share', $share['id'], $request->ipAddress);
+            Response::success($this->formatShareForResponse($share));
+        });
+
+        $router->add('POST', '/v1/shares/{id}/publish', function (Request $request, array $params): void {
+            $auth = $this->requireAuth($request);
+            $body = $request->json();
+            $projection = is_array($body['projection'] ?? null) ? $body['projection'] : [];
+            $share = $this->repository->publishCalendarShareProjection($auth['user']['id'], (string) $params['id'], $projection);
+            $this->repository->appendAuditLog($auth['user']['id'], $auth['device']['id'], 'share_publish', 'calendar_share', $share['id'], $request->ipAddress);
+            Response::success($this->formatShareForResponse($share));
+        });
+
+        $router->add('POST', '/v1/shares/{id}/revoke', function (Request $request, array $params): void {
+            $auth = $this->requireAuth($request);
+            $share = $this->repository->revokeCalendarShare($auth['user']['id'], (string) $params['id']);
+            $this->repository->appendAuditLog($auth['user']['id'], $auth['device']['id'], 'share_revoke', 'calendar_share', $share['id'], $request->ipAddress);
+            Response::success($this->formatShareForResponse($share));
+        });
+
         $router->add('POST', '/v1/bundle/import', function (Request $request, array $_params): void {
             $auth = $this->requireAuth($request);
             $body = $request->json();
@@ -231,6 +281,18 @@ final class Application
         }
 
         return $auth;
+    }
+
+    private function formatShareForResponse(array $share): array
+    {
+        $token = (string) ($share['token'] ?? '');
+        $url = $token !== '' ? $this->config->appUrl . '/v1/share/' . rawurlencode($token) : null;
+        unset($share['token']);
+
+        return [
+            ...$share,
+            'url' => $url,
+        ];
     }
 
     private function enforceTransportSecurity(Request $request): void

@@ -4,6 +4,7 @@ import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
 import { formatMonthYear } from '../../formatting';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
+import { groupEventsByCalendar, shouldSplitCalendarGroups } from '../../calendarGrouping';
 import { createClickIntentRouter } from '../../clickIntent';
 import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
@@ -41,6 +42,7 @@ export default function MonthView({
   headerRef,
   events,
   eventDateIndex,
+  externalCalendarSources = [],
   todayEvents,
   preferences,
   timeZone,
@@ -243,55 +245,88 @@ export default function MonthView({
               </p>
             </button>
 
-            <div className="calendar-event-list">
-              {tile.events.map((event) => (
-                <button
-                  key={event.id}
-                  type="button"
-                  className={[
-                    'calendar-event-pill',
-                    tile.events.length > 1 ? 'calendar-event-pill--compact' : '',
-                    isFocusEvent(event) ? 'calendar-event-card--focus' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  style={{ backgroundColor: event.color || '#4f9d69' }}
-                  onClick={(clickEvent) => {
-                    clickEvent.stopPropagation();
-                    eventClickRouterRef.current.handleSingle({
-                      event,
-                      anchorPoint: getAnchorFromPointerEvent(clickEvent),
-                    });
-                  }}
-                  onDoubleClick={(clickEvent) => {
-                    clickEvent.stopPropagation();
-                    eventClickRouterRef.current.handleDouble({
-                      event,
-                    });
-                  }}
-                  onKeyDown={(keyboardEvent) => {
-                    if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') {
-                      return;
-                    }
+            <div
+              className={[
+                'calendar-event-list',
+                tile.events.length > 1 ? 'calendar-event-list--packed' : '',
+                tile.events.length > 4 ? 'calendar-event-list--crowded' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              {(() => {
+                const groups = groupEventsByCalendar(tile.events, externalCalendarSources);
+                const isSplit = shouldSplitCalendarGroups(groups, preferences?.calendarSplitMode);
+                const renderGroups = isSplit ? groups : [{ id: 'combined', label: '', events: tile.events }];
 
-                    keyboardEvent.preventDefault();
-                    keyboardEvent.stopPropagation();
-                    const payload = {
-                      event,
-                      anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
-                    };
-                    if (keyboardEvent.ctrlKey || keyboardEvent.shiftKey) {
-                      eventHandlersRef.current.onDouble(payload);
-                    } else {
-                      eventHandlersRef.current.onSingle(payload);
-                    }
-                  }}
-                >
-                  <span className="calendar-event-card-title">{event.title}</span>
-                  <span className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</span>
-                  <span className="calendar-event-card-context">{getEventContextLabel(event)}</span>
-                </button>
-              ))}
+                return renderGroups.map((group) => (
+                    <div
+                      key={group.id}
+                      className={[
+                        isSplit ? 'month-calendar-lane' : 'month-calendar-lane month-calendar-lane--combined',
+                        group.events.length > 1 ? 'month-calendar-lane--packed' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      {isSplit ? (
+                        <div className="month-calendar-lane-label" style={{ borderColor: group.color }}>
+                          {group.label}
+                        </div>
+                      ) : null}
+                      {group.events.map((event) => (
+                        <button
+                          key={event.id}
+                          type="button"
+                          className={[
+                            'calendar-event-pill',
+                            tile.events.length > 1 ? 'calendar-event-pill--compact' : '',
+                            tile.events.length > 4 ? 'calendar-event-pill--dense' : '',
+                            isSplit ? 'calendar-event-pill--split' : '',
+                            isFocusEvent(event) ? 'calendar-event-card--focus' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                          style={{ backgroundColor: event.color || group.color || '#4f9d69' }}
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            eventClickRouterRef.current.handleSingle({
+                              event,
+                              anchorPoint: getAnchorFromPointerEvent(clickEvent),
+                            });
+                          }}
+                          onDoubleClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            eventClickRouterRef.current.handleDouble({
+                              event,
+                            });
+                          }}
+                          onKeyDown={(keyboardEvent) => {
+                            if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') {
+                              return;
+                            }
+
+                            keyboardEvent.preventDefault();
+                            keyboardEvent.stopPropagation();
+                            const payload = {
+                              event,
+                              anchorPoint: getAnchorFromElement(keyboardEvent.currentTarget),
+                            };
+                            if (keyboardEvent.ctrlKey || keyboardEvent.shiftKey) {
+                              eventHandlersRef.current.onDouble(payload);
+                            } else {
+                              eventHandlersRef.current.onSingle(payload);
+                            }
+                          }}
+                        >
+                          <span className="calendar-event-card-title">{event.title}</span>
+                          <span className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</span>
+                          <span className="calendar-event-card-context">{getEventContextLabel(event)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ));
+              })()}
             </div>
           </article>
         ))}

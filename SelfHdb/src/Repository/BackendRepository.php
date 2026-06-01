@@ -16,6 +16,26 @@ final class BackendRepository
 
     private function ensureRuntimeSchema(): void
     {
+        $this->pdo->exec(
+            "CREATE TABLE IF NOT EXISTS calendar_shares (
+                id CHAR(36) PRIMARY KEY,
+                user_id CHAR(36) NOT NULL,
+                name VARCHAR(160) NOT NULL,
+                token_hash CHAR(64) NOT NULL UNIQUE,
+                privacy_level VARCHAR(32) NOT NULL DEFAULT 'busy_only',
+                scope_json JSON NOT NULL,
+                projection_json LONGTEXT NULL,
+                projection_updated_at DATETIME(6) NULL,
+                expires_at DATETIME(6) NULL,
+                revoked_at DATETIME(6) NULL,
+                last_accessed_at DATETIME(6) NULL,
+                created_at DATETIME(6) NOT NULL,
+                updated_at DATETIME(6) NOT NULL,
+                CONSTRAINT fk_calendar_shares_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                INDEX idx_calendar_shares_user_updated (user_id, updated_at),
+                INDEX idx_calendar_shares_token_hash (token_hash)
+            )"
+        );
         $this->ensureColumn(
             'sync_envelopes',
             'content_patch_json',
@@ -632,6 +652,171 @@ final class BackendRepository
         ];
     }
 
+    public function createCalendarShare(string $userId, array $input): array
+    {
+        $now = Str::now();
+        $id = Str::uuid();
+        $token = Str::randomToken(32);
+        $name = trim((string) ($input['name'] ?? 'Shared calendar')) ?: 'Shared calendar';
+        $scope = is_array($input['scope'] ?? null) ? $input['scope'] : [];
+        $privacyLevel = $this->normalizeSharePrivacyLevel((string) ($input['privacyLevel'] ?? 'busy_only'));
+        $expiresAt = $this->normalizeNullableTimestamp($input['expiresAt'] ?? null);
+
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO calendar_shares
+             (id, user_id, name, token_hash, privacy_level, scope_json, expires_at, created_at, updated_at)
+             VALUES
+             (:id, :user_id, :name, :token_hash, :privacy_level, :scope_json, :expires_at, :created_at, :updated_at)'
+        );
+        $stmt->execute([
+            'id' => $id,
+            'user_id' => $userId,
+            'name' => substr($name, 0, 160),
+            'token_hash' => Str::hashToken($token),
+            'privacy_level' => $privacyLevel,
+            'scope_json' => json_encode($scope),
+            'expires_at' => $expiresAt,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [
+            ...$this->formatCalendarShare($this->findCalendarShareForUser($userId, $id) ?? []),
+            'token' => $token,
+        ];
+    }
+
+    public function listCalendarShares(string $userId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM calendar_shares WHERE user_id = :user_id ORDER BY updated_at DESC'
+        );
+        $stmt->execute(['user_id' => $userId]);
+
+        return array_map(fn (array $row): array => $this->formatCalendarShare($row), $stmt->fetchAll());
+    }
+
+    public function findCalendarShareForUser(string $userId, string $shareId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM calendar_shares WHERE user_id = :user_id AND id = :id LIMIT 1'
+        );
+        $stmt->execute(['user_id' => $userId, 'id' => $shareId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public function updateCalendarShare(string $userId, string $shareId, array $input): array
+    {
+        $share = $this->findCalendarShareForUser($userId, $shareId);
+        if (!$share) {
+            throw new \RuntimeException('Share link was not found.');
+        }
+
+        $name = array_key_exists('name', $input)
+            ? (trim((string) $input['name']) ?: $share['name'])
+            : $share['name'];
+        $privacyLevel = array_key_exists('privacyLevel', $input)
+            ? $this->normalizeSharePrivacyLevel((string) $input['privacyLevel'])
+            : (string) $share['privacy_level'];
+        $scope = array_key_exists('scope', $input) && is_array($input['scope'])
+            ? $input['scope']
+            : $this->decodeMaterializedJson((string) $share['scope_json']);
+        $expiresAt = array_key_exists('expiresAt', $input)
+            ? $this->normalizeNullableTimestamp($input['expiresAt'])
+            : $share['expires_at'];
+
+        $stmt = $this->pdo->prepare(
+            'UPDATE calendar_shares
+             SET name = :name, privacy_level = :privacy_level, scope_json = :scope_json,
+                 expires_at = :expires_at, updated_at = :updated_at
+             WHERE id = :id AND user_id = :user_id'
+        );
+        $stmt->execute([
+            'id' => $shareId,
+            'user_id' => $userId,
+            'name' => substr($name, 0, 160),
+            'privacy_level' => $privacyLevel,
+            'scope_json' => json_encode($scope),
+            'expires_at' => $expiresAt,
+            'updated_at' => Str::now(),
+        ]);
+
+        return $this->formatCalendarShare($this->findCalendarShareForUser($userId, $shareId) ?? []);
+    }
+
+    public function publishCalendarShareProjection(string $userId, string $shareId, array $projection): array
+    {
+        $share = $this->findCalendarShareForUser($userId, $shareId);
+        if (!$share) {
+            throw new \RuntimeException('Share link was not found.');
+        }
+
+        $now = Str::now();
+        $stmt = $this->pdo->prepare(
+            'UPDATE calendar_shares
+             SET projection_json = :projection_json, projection_updated_at = :projection_updated_at,
+                 updated_at = :updated_at
+             WHERE id = :id AND user_id = :user_id'
+        );
+        $stmt->execute([
+            'id' => $shareId,
+            'user_id' => $userId,
+            'projection_json' => json_encode($projection),
+            'projection_updated_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $this->formatCalendarShare($this->findCalendarShareForUser($userId, $shareId) ?? []);
+    }
+
+    public function revokeCalendarShare(string $userId, string $shareId): array
+    {
+        $share = $this->findCalendarShareForUser($userId, $shareId);
+        if (!$share) {
+            throw new \RuntimeException('Share link was not found.');
+        }
+
+        $now = Str::now();
+        $stmt = $this->pdo->prepare(
+            'UPDATE calendar_shares SET revoked_at = :revoked_at, updated_at = :updated_at WHERE id = :id AND user_id = :user_id'
+        );
+        $stmt->execute([
+            'id' => $shareId,
+            'user_id' => $userId,
+            'revoked_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $this->formatCalendarShare($this->findCalendarShareForUser($userId, $shareId) ?? []);
+    }
+
+    public function getPublicCalendarShare(string $token): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM calendar_shares WHERE token_hash = :token_hash LIMIT 1');
+        $stmt->execute(['token_hash' => Str::hashToken($token)]);
+        $share = $stmt->fetch();
+        if (!$share || $share['revoked_at']) {
+            return null;
+        }
+
+        if ($share['expires_at'] && strtotime((string) $share['expires_at']) <= time()) {
+            return null;
+        }
+
+        $this->pdo
+            ->prepare('UPDATE calendar_shares SET last_accessed_at = :last_accessed_at WHERE id = :id')
+            ->execute(['last_accessed_at' => Str::now(), 'id' => $share['id']]);
+
+        return [
+            'id' => $share['id'],
+            'name' => $share['name'],
+            'privacyLevel' => $share['privacy_level'],
+            'projectionUpdatedAt' => $share['projection_updated_at'],
+            'calendar' => $this->decodeMaterializedJson((string) ($share['projection_json'] ?? '')),
+        ];
+    }
+
     public function importBundle(string $userId, string $deviceId, array $bundle): array
     {
         if (($bundle['version'] ?? '') !== 'calendar-bundle-v1') {
@@ -723,6 +908,44 @@ final class BackendRepository
 
         $decoded = json_decode($value, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function normalizeSharePrivacyLevel(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        return in_array($normalized, ['busy_only', 'titles_only', 'full_details'], true)
+            ? $normalized
+            : 'busy_only';
+    }
+
+    private function normalizeNullableTimestamp(mixed $value): ?string
+    {
+        $candidate = trim((string) ($value ?? ''));
+        if ($candidate === '') {
+            return null;
+        }
+
+        try {
+            return (new \DateTimeImmutable($candidate))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function formatCalendarShare(array $share): array
+    {
+        return [
+            'id' => $share['id'] ?? '',
+            'name' => $share['name'] ?? 'Shared calendar',
+            'privacyLevel' => $share['privacy_level'] ?? 'busy_only',
+            'scope' => $this->decodeMaterializedJson((string) ($share['scope_json'] ?? '')),
+            'projectionUpdatedAt' => $share['projection_updated_at'] ?? null,
+            'expiresAt' => $share['expires_at'] ?? null,
+            'revokedAt' => $share['revoked_at'] ?? null,
+            'lastAccessedAt' => $share['last_accessed_at'] ?? null,
+            'createdAt' => $share['created_at'] ?? null,
+            'updatedAt' => $share['updated_at'] ?? null,
+        ];
     }
 
     private function normalizeClientTimestamp(?string $value): string

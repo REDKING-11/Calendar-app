@@ -9,8 +9,10 @@ const OAUTH_PROVIDER_SETUP = {
   google: {
     label: 'Google',
     clientIdEnv: 'CALENDAR_GOOGLE_CLIENT_ID',
+    clientSecretEnv: 'CALENDAR_GOOGLE_CLIENT_SECRET',
     redirectUriEnv: 'CALENDAR_GOOGLE_REDIRECT_URI',
     clientIdMetaKey: 'oauth.google.clientId',
+    clientSecretMetaKey: 'oauth.google.clientSecret',
     redirectUriMetaKey: 'oauth.google.redirectUri',
     defaultRedirectUri: 'http://127.0.0.1:45781/oauth/google/callback',
   },
@@ -125,6 +127,36 @@ function normalizeOAuthErrorText(value) {
     .trim();
 }
 
+function sanitizeOAuthClientSecret(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate) {
+    return '';
+  }
+
+  if (candidate.length > 1000 || /[\s\u0000-\u001f\u007f]/.test(candidate)) {
+    throw new Error('OAuth client secret must be a single line without spaces.');
+  }
+
+  return candidate;
+}
+
+function getGoogleOAuthHints(error = '', errorDescription = '') {
+  const detail = `${error} ${errorDescription}`.toLowerCase();
+  const hints = [
+    'Create the OAuth client as a Google "Desktop app" client. Do not use a "Web application" client.',
+    'Paste the Desktop app client ID and generated client secret into Calendar App Settings.',
+    `Use the Calendar App Google redirect URI: ${OAUTH_PROVIDER_SETUP.google.defaultRedirectUri}.`,
+  ];
+
+  if (detail.includes('client_secret is missing')) {
+    hints.unshift(
+      'This usually means the pasted Google client ID belongs to a Web application OAuth client, which requires a client secret.'
+    );
+  }
+
+  return hints;
+}
+
 function getMicrosoftOAuthHints(config = {}, error = '', errorDescription = '') {
   const detail = `${error} ${errorDescription}`.toLowerCase();
   const redirectUri = config.redirectUri || OAUTH_PROVIDER_SETUP.microsoft.defaultRedirectUri;
@@ -167,6 +199,8 @@ function buildOAuthCallbackErrorPage(config = {}, error = '', errorDescription =
   const hints =
     config.provider === 'microsoft'
       ? getMicrosoftOAuthHints(config, error, description)
+      : config.provider === 'google'
+        ? getGoogleOAuthHints(error, description)
       : [];
   const hintMarkup = hints.length
     ? `<h2>What to check</h2><ul>${hints
@@ -187,6 +221,40 @@ function buildOAuthCallbackErrorPage(config = {}, error = '', errorDescription =
     <p>You can close this tab and try again.</p>
   </body>
 </html>`;
+}
+
+function formatOAuthTokenError(provider, errorText = '') {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch (_error) {
+    parsed = null;
+  }
+
+  const description = normalizeOAuthErrorText(
+    parsed?.error_description || parsed?.error || errorText
+  );
+
+  if (provider === 'google' && description.toLowerCase().includes('client_secret is missing')) {
+    return [
+      'Google rejected this OAuth client because it expects a client secret.',
+      'Create a Google OAuth client with application type "Desktop app", paste its client ID and client secret in Settings, then try connecting again.',
+      'Do not use a Google "Web application" client ID for Calendar App.',
+    ].join(' ');
+  }
+
+  return `OAuth token exchange failed: ${errorText}`;
+}
+
+function formatOAuthRefreshError(provider, errorText = '') {
+  if (
+    provider === 'google' &&
+    String(errorText || '').toLowerCase().includes('client_secret is missing')
+  ) {
+    return 'Google rejected this account refresh because the saved client ID belongs to a client type that needs a client secret. Replace it with a Desktop app OAuth client ID and reconnect the account.';
+  }
+
+  return `OAuth token refresh failed: ${errorText}`;
 }
 
 function decodeJwtPayload(token) {
@@ -411,15 +479,18 @@ function buildMicrosoftDateTime(entry = {}, fallbackMinutes = 60) {
 }
 
 function mapGoogleCalendarItem(accountId, item = {}) {
+  const displayName = String(item.summaryOverride || item.summary || item.id || 'Google Calendar').trim();
+
   return {
     accountId,
     provider: 'google',
     remoteCalendarId: String(item.id || ''),
-    displayName: String(item.summary || item.id || 'Google Calendar').trim(),
+    displayName,
     selected: Boolean(item.selected ?? true),
     color: normalizeCalendarColor(item.backgroundColor, '#4f9d69'),
     timeZone: String(item.timeZone || ''),
     primary: Boolean(item.primary),
+    hidden: Boolean(item.hidden),
     accessRole: String(item.accessRole || ''),
   };
 }
@@ -578,6 +649,24 @@ class OAuthService {
       });
   }
 
+  setSecretMetaValue(key, value, context) {
+    const sanitized = sanitizeOAuthClientSecret(value);
+    this.setMetaValue(key, sanitized ? this.cryptoService.encryptText(sanitized, context) : '');
+  }
+
+  getSecretMetaValue(key, context) {
+    const cipherText = this.getMetaValue(key);
+    if (!cipherText) {
+      return '';
+    }
+
+    try {
+      return this.cryptoService.decryptText(cipherText, context);
+    } catch (_error) {
+      return '';
+    }
+  }
+
   getResolvedClientSetup(provider) {
     const setup = OAUTH_PROVIDER_SETUP[provider];
     if (!setup) {
@@ -586,11 +675,16 @@ class OAuthService {
 
     const storedClientId = this.getMetaValue(setup.clientIdMetaKey);
     const envClientId = process.env[setup.clientIdEnv] || '';
+    const storedClientSecret = setup.clientSecretMetaKey
+      ? this.getSecretMetaValue(setup.clientSecretMetaKey, `oauth:${provider}:client-secret`)
+      : '';
+    const envClientSecret = setup.clientSecretEnv ? process.env[setup.clientSecretEnv] || '' : '';
     const storedRedirectUri = this.getMetaValue(setup.redirectUriMetaKey);
     const envRedirectUri = process.env[setup.redirectUriEnv] || '';
     const storedAuthority = setup.authorityMetaKey ? this.getMetaValue(setup.authorityMetaKey) : '';
     const envAuthority = setup.authorityEnv ? process.env[setup.authorityEnv] || '' : '';
     const clientId = storedClientId || envClientId || '';
+    const clientSecret = storedClientSecret || envClientSecret || '';
     const redirectUri = storedRedirectUri || envRedirectUri || setup.defaultRedirectUri;
     const authority = setup.defaultAuthority
       ? sanitizeMicrosoftAuthority(storedAuthority || envAuthority || setup.defaultAuthority)
@@ -601,6 +695,9 @@ class OAuthService {
       provider,
       clientId,
       clientIdSource: storedClientId ? 'settings' : envClientId ? 'environment' : '',
+      clientSecret,
+      clientSecretConfigured: Boolean(clientSecret),
+      clientSecretSource: storedClientSecret ? 'settings' : envClientSecret ? 'environment' : '',
       redirectUri,
       redirectUriSource: storedRedirectUri ? 'settings' : envRedirectUri ? 'environment' : 'default',
       authority,
@@ -626,6 +723,8 @@ class OAuthService {
             clientId: setup.clientId,
             clientIdConfigured: Boolean(setup.clientId),
             clientIdSource: setup.clientIdSource,
+            clientSecretConfigured: Boolean(setup.clientSecretConfigured),
+            clientSecretSource: setup.clientSecretSource,
             redirectUri: setup.redirectUri,
             redirectUriSource: setup.redirectUriSource,
             defaultRedirectUri: setup.defaultRedirectUri,
@@ -648,6 +747,18 @@ class OAuthService {
       const providerInput = input?.[provider] || {};
       if (Object.prototype.hasOwnProperty.call(providerInput, 'clientId')) {
         this.setMetaValue(setup.clientIdMetaKey, sanitizeOAuthClientId(providerInput.clientId));
+      }
+
+      if (
+        setup.clientSecretMetaKey &&
+        Object.prototype.hasOwnProperty.call(providerInput, 'clientSecret') &&
+        String(providerInput.clientSecret || '').trim()
+      ) {
+        this.setSecretMetaValue(
+          setup.clientSecretMetaKey,
+          providerInput.clientSecret,
+          `oauth:${provider}:client-secret`
+        );
       }
 
       if (Object.prototype.hasOwnProperty.call(providerInput, 'redirectUri')) {
@@ -710,6 +821,7 @@ class OAuthService {
       return {
         provider,
         clientId: clientSetup.clientId,
+        clientSecret: clientSetup.clientSecret,
         authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
         tokenUrl: 'https://oauth2.googleapis.com/token',
         revokeUrl: 'https://oauth2.googleapis.com/revoke',
@@ -1096,23 +1208,28 @@ class OAuthService {
       `oauth-flow:${flow.state}`
     );
 
+    const tokenRequestBody = new URLSearchParams({
+      client_id: config.clientId,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: flow.redirectUri,
+      code_verifier: codeVerifier,
+    });
+    if (config.clientSecret) {
+      tokenRequestBody.set('client_secret', config.clientSecret);
+    }
+
     const tokenResponse = await fetch(config.tokenUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({
-        client_id: config.clientId,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: flow.redirectUri,
-        code_verifier: codeVerifier,
-      }),
+      body: tokenRequestBody,
     });
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      throw new Error(`OAuth token exchange failed: ${errorText}`);
+      throw new Error(formatOAuthTokenError(flow.provider, errorText));
     }
 
     const tokenPayload = await tokenResponse.json();
@@ -1271,21 +1388,26 @@ class OAuthService {
       `oauth-token:${account.tokenId}:refresh`
     );
 
+    const refreshRequestBody = new URLSearchParams({
+      client_id: config.clientId,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+    if (config.clientSecret) {
+      refreshRequestBody.set('client_secret', config.clientSecret);
+    }
+
     const tokenResponse = await fetch(config.tokenUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({
-        client_id: config.clientId,
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-      }),
+      body: refreshRequestBody,
     });
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      throw new Error(`OAuth token refresh failed: ${errorText}`);
+      throw new Error(formatOAuthRefreshError(account.provider, errorText));
     }
 
     const tokenPayload = await tokenResponse.json();
@@ -1494,6 +1616,7 @@ class OAuthService {
       do {
         const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
         url.searchParams.set('maxResults', '250');
+        url.searchParams.set('showHidden', 'true');
         if (nextPageToken) {
           url.searchParams.set('pageToken', nextPageToken);
         }

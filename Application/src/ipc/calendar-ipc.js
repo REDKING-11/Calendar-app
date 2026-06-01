@@ -59,6 +59,7 @@ function registerCalendarHandlers(store) {
     'calendar:listExternalCalendars',
     'calendar:importExternalCalendar',
     'calendar:refreshExternalSource',
+    'calendar:setExternalCalendarSourceSelected',
     'calendar:importData',
     'calendar:importDataFromFilePicker',
     'calendar:exportData',
@@ -89,6 +90,11 @@ function registerCalendarHandlers(store) {
     'hosted:syncNow',
     'hosted:disconnect',
     'hosted:exportEnv',
+    'hosted:listShares',
+    'hosted:createShare',
+    'hosted:updateShare',
+    'hosted:revokeShare',
+    'hosted:publishShare',
     'security:beginReauth',
     'security:completeReauth',
     'security:exportSecureData',
@@ -109,6 +115,9 @@ function registerCalendarHandlers(store) {
   );
   handle('calendar:refreshExternalSource', (_event, input) =>
     store.refreshExternalSource(input || {})
+  );
+  handle('calendar:setExternalCalendarSourceSelected', (_event, input) =>
+    store.setExternalCalendarSourceSelected(input || {})
   );
   handle('calendar:importData', (_event, input) => store.importData(input || {}));
   handle('calendar:importDataFromFilePicker', () => store.importDataFromFilePicker());
@@ -160,6 +169,11 @@ function registerCalendarHandlers(store) {
   handle('hosted:syncNow', () => store.syncHostedNow());
   handle('hosted:disconnect', () => store.disconnectHostedSync());
   handle('hosted:exportEnv', (_event, values) => store.exportHostedEnvFile(values));
+  handle('hosted:listShares', () => store.listHostedShares());
+  handle('hosted:createShare', (_event, input) => store.createHostedShare(input || {}));
+  handle('hosted:updateShare', (_event, input) => store.updateHostedShare(input || {}));
+  handle('hosted:revokeShare', (_event, shareId) => store.revokeHostedShare(shareId));
+  handle('hosted:publishShare', (_event, input) => store.publishHostedShare(input || {}));
   handle('security:beginReauth', (_event, action) => store.beginReauth(action));
   handle('security:completeReauth', (_event, challengeId, response) =>
     store.completeReauth(challengeId, response)

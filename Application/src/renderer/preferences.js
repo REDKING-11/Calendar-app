@@ -15,11 +15,13 @@ export const STORAGE_KEYS = {
   weekStartsOn: 'calendar-settings-week-start',
   timeFormat: 'calendar-settings-time-format',
   showCompletedTasks: 'calendar-settings-show-completed-tasks',
+  calendarSplitMode: 'calendar-settings-split-mode',
   defaultEventDuration: 'calendar-settings-default-event-duration',
   defaultTaskDuration: 'calendar-settings-default-task-duration',
   defaultQuickType: 'calendar-settings-default-quick-type',
   defaultQuickSendFrom: 'calendar-settings-default-quick-send-from',
   defaultQuickDuration: 'calendar-settings-default-quick-duration',
+  autoSaveToSelectedProviderCalendar: 'calendar-settings-auto-save-selected-provider-calendar',
   lastGoogleInviteTarget: 'calendar-settings-last-google-invite-target',
   lastMicrosoftInviteTarget: 'calendar-settings-last-microsoft-invite-target',
 };
@@ -35,11 +37,13 @@ export const DEFAULT_PREFERENCES = {
   weekStartsOn: 'auto',
   timeFormat: '12h',
   showCompletedTasks: true,
+  calendarSplitMode: 'split',
   defaultEventDuration: 60,
   defaultTaskDuration: 30,
   defaultQuickType: 'meeting',
   defaultQuickSendFrom: 'internal',
   defaultQuickDuration: 60,
+  autoSaveToSelectedProviderCalendar: true,
   lastGoogleInviteTarget: null,
   lastMicrosoftInviteTarget: null,
   notificationEmail: '',
@@ -91,6 +95,8 @@ export function getStoredPreferences() {
     showCompletedTasks:
       (storage?.getItem(STORAGE_KEYS.showCompletedTasks) ?? String(DEFAULT_PREFERENCES.showCompletedTasks)) ===
       'true',
+    calendarSplitMode:
+      storage?.getItem(STORAGE_KEYS.calendarSplitMode) || DEFAULT_PREFERENCES.calendarSplitMode,
     defaultEventDuration: Number(
       storage?.getItem(STORAGE_KEYS.defaultEventDuration) || DEFAULT_PREFERENCES.defaultEventDuration
     ),
@@ -106,6 +112,9 @@ export function getStoredPreferences() {
       storage?.getItem(STORAGE_KEYS.defaultQuickDuration) ||
         DEFAULT_PREFERENCES.defaultQuickDuration
     ),
+    autoSaveToSelectedProviderCalendar:
+      (storage?.getItem(STORAGE_KEYS.autoSaveToSelectedProviderCalendar) ??
+        String(DEFAULT_PREFERENCES.autoSaveToSelectedProviderCalendar)) === 'true',
     lastGoogleInviteTarget: readJsonPreference(
       storage,
       STORAGE_KEYS.lastGoogleInviteTarget,
@@ -147,6 +156,10 @@ export function persistPreferences(preferences) {
   storage.setItem(STORAGE_KEYS.timeFormat, preferences.timeFormat || DEFAULT_PREFERENCES.timeFormat);
   storage.setItem(STORAGE_KEYS.showCompletedTasks, String(Boolean(preferences.showCompletedTasks)));
   storage.setItem(
+    STORAGE_KEYS.calendarSplitMode,
+    preferences.calendarSplitMode || DEFAULT_PREFERENCES.calendarSplitMode
+  );
+  storage.setItem(
     STORAGE_KEYS.defaultEventDuration,
     String(preferences.defaultEventDuration || DEFAULT_PREFERENCES.defaultEventDuration)
   );
@@ -165,6 +178,13 @@ export function persistPreferences(preferences) {
   storage.setItem(
     STORAGE_KEYS.defaultQuickDuration,
     String(preferences.defaultQuickDuration || DEFAULT_PREFERENCES.defaultQuickDuration)
+  );
+  storage.setItem(
+    STORAGE_KEYS.autoSaveToSelectedProviderCalendar,
+    String(
+      preferences.autoSaveToSelectedProviderCalendar ??
+        DEFAULT_PREFERENCES.autoSaveToSelectedProviderCalendar
+    )
   );
   storage.setItem(
     STORAGE_KEYS.lastGoogleInviteTarget,

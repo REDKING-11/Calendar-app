@@ -20,6 +20,7 @@ import {
 import {
   addMinutesToDate,
   ALL_DAY_DURATION_MINUTES,
+  applyCalendarContextToDraft,
   buildEventPayloadFromDraft,
   createNotificationDraft,
   createDraftEventFromEvent,
@@ -51,6 +52,7 @@ import {
   shouldPromoteQuickCreateDraft,
   shouldPromoteQuickEditDraft,
 } from './composerRouting';
+import { shouldFallbackActiveCalendarContext } from './calendarContextPersistence';
 import {
   focusFirstAvailable,
   getRegionShortcutTarget,
@@ -76,6 +78,8 @@ const EMPTY_COMPOSER_STATE = {
   mode: 'create',
   anchorPoint: null,
 };
+const LOCAL_CALENDAR_VISIBILITY_KEY = 'calendar-local-calendar-visible';
+const ACTIVE_CALENDAR_CONTEXT_KEY = 'calendar-active-calendar-context';
 
 function getWindowMode() {
   const params = new URLSearchParams(window.location.search);
@@ -197,6 +201,152 @@ function collectKnownNotificationEmails(preferences, connectedAccounts = []) {
   }
 
   return Array.from(knownEmails);
+}
+
+function getEventSourceIds(event = {}) {
+  return (event.externalProviderLinks || [])
+    .map((link) => String(link?.sourceId || '').trim())
+    .filter(Boolean);
+}
+
+function getEventPrimarySourceId(event = {}) {
+  return getEventSourceIds(event)[0] || '';
+}
+
+function isLocalCalendarEvent(event = {}) {
+  return getEventSourceIds(event).length === 0;
+}
+
+function getAccountTitle(account = {}) {
+  return account.email || account.displayName || 'Connected account';
+}
+
+function buildSidebarCalendarGroups({
+  connectedAccounts = [],
+  externalCalendarSources = [],
+  events = [],
+  isLocalCalendarVisible = true,
+  activeCalendarContextId = 'local',
+}) {
+  const sourceEventCounts = new Map();
+  let localEventCount = 0;
+
+  for (const event of events) {
+    const sourceIds = getEventSourceIds(event);
+    if (sourceIds.length === 0) {
+      localEventCount += 1;
+      continue;
+    }
+
+    for (const sourceId of sourceIds) {
+      sourceEventCounts.set(sourceId, (sourceEventCounts.get(sourceId) || 0) + 1);
+    }
+  }
+
+  const groupsByAccount = new Map(
+    connectedAccounts.map((account) => [
+      account.accountId,
+      {
+        id: account.accountId,
+        provider: account.provider,
+        title: getAccountTitle(account),
+        status: account.status || '',
+        calendars: [],
+      },
+    ])
+  );
+
+  for (const source of externalCalendarSources) {
+    const group =
+      groupsByAccount.get(source.accountId) || {
+        id: source.accountId || source.provider || 'external',
+        provider: source.provider,
+        title: source.displayName || source.provider || 'External calendars',
+        status: '',
+        calendars: [],
+      };
+
+    group.calendars.push({
+      id: source.sourceId,
+      sourceId: source.sourceId,
+      label: source.displayName || source.remoteCalendarId || 'Calendar',
+      provider: source.provider,
+      color: source.provider === 'microsoft' ? '#4d8cf5' : '#4f9d69',
+      visible: source.selected !== false,
+      eventCount: sourceEventCounts.get(source.sourceId) || 0,
+      active: activeCalendarContextId === source.sourceId,
+    });
+    groupsByAccount.set(group.id, group);
+  }
+
+  return [
+    {
+      id: 'local',
+      provider: 'local',
+      title: 'This device',
+      status: 'local',
+      calendars: [
+        {
+          id: 'local',
+          sourceId: '',
+          label: 'Local calendar',
+          provider: 'local',
+          color: '#64748b',
+          visible: isLocalCalendarVisible,
+          eventCount: localEventCount,
+          active: activeCalendarContextId === 'local',
+        },
+      ],
+    },
+    ...Array.from(groupsByAccount.values()).map((group) => ({
+      ...group,
+      calendars: group.calendars.sort((left, right) => left.label.localeCompare(right.label)),
+    })),
+  ];
+}
+
+function getScopeForCalendarProvider(provider = '') {
+  if (provider === 'google') {
+    return 'work';
+  }
+  if (provider === 'microsoft') {
+    return 'personal';
+  }
+  return 'internal';
+}
+
+function findCalendarContext(contextId = 'local', externalCalendarSources = []) {
+  if (!contextId || contextId === 'local') {
+    return {
+      id: 'local',
+      provider: 'local',
+      scope: 'internal',
+      accountId: '',
+      calendarId: '',
+      label: 'Local calendar',
+    };
+  }
+
+  const source = externalCalendarSources.find((item) => item.sourceId === contextId);
+  if (!source) {
+    return {
+      id: 'local',
+      provider: 'local',
+      scope: 'internal',
+      accountId: '',
+      calendarId: '',
+      label: 'Local calendar',
+    };
+  }
+
+  return {
+    id: source.sourceId,
+    provider: source.provider,
+    scope: getScopeForCalendarProvider(source.provider),
+    accountId: source.accountId || '',
+    calendarId: source.remoteCalendarId || '',
+    label: source.displayName || source.remoteCalendarId || 'Provider calendar',
+  };
 }
 
 function getEligibleSenderAccount(scope = 'internal', connectedAccounts = []) {
@@ -376,6 +526,20 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [quickFilter, setQuickFilter] = useState('all');
   const [activeTagFilters, setActiveTagFilters] = useState([]);
+  const [isLocalCalendarVisible, setIsLocalCalendarVisible] = useState(() => {
+    if (typeof window === 'undefined') {
+      return true;
+    }
+
+    return window.localStorage.getItem(LOCAL_CALENDAR_VISIBILITY_KEY) !== 'false';
+  });
+  const [activeCalendarContextId, setActiveCalendarContextId] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 'local';
+    }
+
+    return window.localStorage.getItem(ACTIVE_CALENDAR_CONTEXT_KEY) || 'local';
+  });
   const [isUpcomingOpen, setIsUpcomingOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
@@ -536,6 +700,41 @@ function App() {
     () => collectKnownNotificationEmails(preferences, connectedAccounts),
     [connectedAccounts, preferences.notificationEmail, preferences.hostedEmail]
   );
+  const visibleExternalSourceIds = useMemo(
+    () =>
+      new Set(
+        externalCalendarSources
+          .filter((source) => source.selected !== false)
+          .map((source) => source.sourceId)
+      ),
+    [externalCalendarSources]
+  );
+  const sidebarCalendarGroups = useMemo(
+    () =>
+      buildSidebarCalendarGroups({
+        connectedAccounts,
+        externalCalendarSources,
+        events: allEvents,
+        isLocalCalendarVisible,
+        activeCalendarContextId,
+      }),
+    [activeCalendarContextId, allEvents, connectedAccounts, externalCalendarSources, isLocalCalendarVisible]
+  );
+  const activeCalendarContext = useMemo(
+    () => findCalendarContext(activeCalendarContextId, externalCalendarSources),
+    [activeCalendarContextId, externalCalendarSources]
+  );
+
+  useEffect(() => {
+    if (shouldFallbackActiveCalendarContext({
+      snapshotLoaded: Boolean(snapshot),
+      activeCalendarContextId,
+      externalCalendarSources,
+    })) {
+      setActiveCalendarContextId('local');
+      window.localStorage.setItem(ACTIVE_CALENDAR_CONTEXT_KEY, 'local');
+    }
+  }, [activeCalendarContextId, externalCalendarSources, snapshot]);
 
   const clearHolidayPreload = () => {
     holidayPreloadRequestRef.current += 1;
@@ -671,6 +870,14 @@ function App() {
       const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
       return allEvents.filter((event) => {
+        const primarySourceId = getEventPrimarySourceId(event);
+        if (!primarySourceId && !isLocalCalendarVisible) {
+          return false;
+        }
+        if (primarySourceId && !visibleExternalSourceIds.has(primarySourceId)) {
+          return false;
+        }
+
         if (!preferences.showCompletedTasks && event.completed) {
           return false;
         }
@@ -706,6 +913,8 @@ function App() {
     },
     [
       allEvents,
+      isLocalCalendarVisible,
+      visibleExternalSourceIds,
       normalizedSearchQuery,
       quickFilter,
       activeTagFilters,
@@ -842,6 +1051,13 @@ function App() {
     };
   };
 
+  const createContextDraftForDate = (date) =>
+    applyInviteDefaultsToDraft(
+      applyCalendarContextToDraft(createDraftForDate(date, preferences), activeCalendarContext, {
+        autoSaveToProvider: preferences.autoSaveToSelectedProviderCalendar !== false,
+      })
+    );
+
   const openQuickComposer = ({ date = new Date(), anchorPoint = null, eventToEdit = null } = {}) => {
     setIsAboutOpen(false);
     setIsUpcomingOpen(false);
@@ -861,7 +1077,7 @@ function App() {
 
     setActiveEvent(null);
     setSelectedDate(date);
-    setDraftEvent(createDraftForDate(date, preferences));
+    setDraftEvent(createContextDraftForDate(date));
     setComposerState({
       variant: 'quick',
       mode: 'create',
@@ -888,7 +1104,7 @@ function App() {
 
     setActiveEvent(null);
     setSelectedDate(date);
-    setDraftEvent(applyInviteDefaultsToDraft(createDraftForDate(date, preferences)));
+    setDraftEvent(createContextDraftForDate(date));
     setComposerState({
       variant: 'drawer',
       mode: 'create',
@@ -1255,6 +1471,64 @@ function App() {
     }
   };
 
+  const handleToggleLocalCalendar = (visible) => {
+    setIsLocalCalendarVisible(Boolean(visible));
+    window.localStorage.setItem(LOCAL_CALENDAR_VISIBILITY_KEY, visible ? 'true' : 'false');
+  };
+
+  const handleToggleExternalCalendarSource = async (sourceId, visible) => {
+    if (!sourceId) {
+      return;
+    }
+
+    try {
+      const nextSnapshot = await window.calendarApp.setExternalCalendarSourceSelected({
+        sourceId,
+        selected: Boolean(visible),
+      });
+      snapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+    } catch (error) {
+      rememberAppError(error, 'external-calendar-visibility');
+      setOAuthStatusMessage(error?.message || 'Calendar visibility could not be updated.');
+    }
+  };
+
+  const handleUseSidebarCalendar = (calendar) => {
+    const nextContextId = calendar?.provider === 'local' ? 'local' : calendar?.sourceId;
+    if (!nextContextId) {
+      return;
+    }
+
+    setActiveCalendarContextId(nextContextId);
+    window.localStorage.setItem(ACTIVE_CALENDAR_CONTEXT_KEY, nextContextId);
+
+    if (composerState.mode === 'create') {
+      const nextContext = findCalendarContext(nextContextId, externalCalendarSources);
+      setDraftEvent((current) =>
+        applyInviteDefaultsToDraft(
+          applyCalendarContextToDraft(current, nextContext, {
+            autoSaveToProvider: preferences.autoSaveToSelectedProviderCalendar !== false,
+          })
+        )
+      );
+    }
+  };
+
+  const handleToggleSidebarCalendar = async (calendar) => {
+    if (!calendar) {
+      return;
+    }
+
+    const nextVisible = !calendar.visible;
+    if (calendar.provider === 'local') {
+      handleToggleLocalCalendar(nextVisible);
+      return;
+    }
+
+    await handleToggleExternalCalendarSource(calendar.sourceId, nextVisible);
+  };
+
   const persistQuickComposerDefaults = () => {
     const draftDuration = getDraftDurationMinutes(
       draftEvent,
@@ -1316,21 +1590,19 @@ function App() {
 
     if (
       payload.inviteDeliveryMode === 'provider_invite' &&
-      inviteEmails.length > 0 &&
       payload.syncPolicy === 'internal_only'
     ) {
       setComposerStatusMessage(
-        'Internal events stay local. Switch Event scope to Work or Personal before sending invites.'
+        'Local events stay inside Calendar App. Choose a Google or Outlook calendar before saving to a provider.'
       );
       return;
     }
 
     if (
       payload.inviteDeliveryMode === 'provider_invite' &&
-      inviteEmails.length > 0 &&
       (!payload.inviteTargetAccountId || !payload.inviteTargetCalendarId)
     ) {
-      setComposerStatusMessage('Choose the account and calendar to send invites through, or save locally only.');
+      setComposerStatusMessage('Choose the account and calendar to save this event to, or save locally only.');
       setComposerState((current) => promoteComposerStateToDrawer(current));
       return;
     }
@@ -1408,6 +1680,13 @@ function App() {
     } finally {
       setHostedBusyAction('');
     }
+  };
+
+  const runHostedShareAction = async (action) => {
+    const nextSnapshot = await action();
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    return nextSnapshot?.hostedResult || {};
   };
 
   const buildHostedCredentials = () => ({
@@ -1814,6 +2093,16 @@ function App() {
               }
             })
           }
+          onListHostedShares={() => runHostedShareAction(() => window.calendarApp.listHostedShares())}
+          onCreateHostedShare={(input) =>
+            runHostedShareAction(() => window.calendarApp.createHostedShare(input))
+          }
+          onRevokeHostedShare={(shareId) =>
+            runHostedShareAction(() => window.calendarApp.revokeHostedShare(shareId))
+          }
+          onPublishHostedShare={(input) =>
+            runHostedShareAction(() => window.calendarApp.publishHostedShare(input))
+          }
           hostedBusyAction={hostedBusyAction}
           hostedStatusMessage={hostedStatusMessage}
           connectedAccounts={connectedAccounts}
@@ -1855,6 +2144,9 @@ function App() {
           events={events}
           eventDateIndex={eventDateIndex}
           visibleEvents={visibleEvents}
+          calendarGroups={sidebarCalendarGroups}
+          connectedAccounts={connectedAccounts}
+          externalCalendarSources={externalCalendarSources}
           preferences={preferences}
           timeZone={preferences.timeZone}
           selectedDate={selectedDate}
@@ -1867,6 +2159,8 @@ function App() {
           activeTagFilters={activeTagFilters}
           onToggleTagFilter={handleToggleTagFilter}
           onManageTag={handleManageTag}
+          onToggleCalendar={handleToggleSidebarCalendar}
+          onUseCalendar={handleUseSidebarCalendar}
           onClearFilters={() => {
             setSearchQuery('');
             setQuickFilter('all');
@@ -1878,6 +2172,9 @@ function App() {
           <Header
             regionRef={appHeaderRegionRef}
             eventCount={snapshot?.stats?.activeEventCount || 0}
+            calendarView={calendarView}
+            selectedDate={selectedDate}
+            preferences={preferences}
             onToggleUpcoming={() => setIsUpcomingOpen((current) => !current)}
             onOpenDebug={() => setIsDebugPanelOpen((current) => !current)}
             onOpenAbout={() => setIsAboutOpen(true)}
@@ -1907,6 +2204,7 @@ function App() {
               calendarView={calendarView}
               events={events}
               eventDateIndex={eventDateIndex}
+              externalCalendarSources={externalCalendarSources}
               todayEvents={todayEvents}
               preferences={preferences}
               selectedDate={selectedDate}
@@ -1991,6 +2289,7 @@ function App() {
         onOpenFullDetails={() => setComposerState((current) => promoteComposerStateToDrawer(current))}
         knownNotificationEmails={knownNotificationEmails}
         connectedAccounts={connectedAccounts}
+        externalCalendarSources={externalCalendarSources}
         providers={notificationProviders}
         onConnectProvider={handleStartOAuthConnect}
         onOpenConnectionSettings={handleOpenConnectionSettings}
@@ -2087,7 +2386,7 @@ function App() {
                 className="app-button app-button--primary"
                 onClick={() => commitEventSave(pendingInviteConfirmation.payload)}
               >
-                Send invites
+                Save and send invites
               </button>
             </div>
           </section>

@@ -1540,6 +1540,69 @@ class CalendarStore {
     return rows.map((row) => this.rowToEvent(row));
   }
 
+  attachExternalSourceLinksToEvents(events = [], externalEventLinks = []) {
+    const linksByEventId = new Map();
+
+    for (const link of externalEventLinks) {
+      if (normalizeSourceLinkStatus(link.syncStatus) !== 'active') {
+        continue;
+      }
+
+      const eventLinks = linksByEventId.get(link.eventId) || [];
+      eventLinks.push(link);
+      linksByEventId.set(link.eventId, eventLinks);
+    }
+
+    return events.map((event) => {
+      const sourceLinks = linksByEventId.get(event.id) || [];
+      if (sourceLinks.length === 0) {
+        return event;
+      }
+
+      const remainingSourceLinks = [...sourceLinks];
+      const contentLinks = Array.isArray(event.externalProviderLinks)
+        ? event.externalProviderLinks
+        : [];
+      const mergedLinks = contentLinks.map((contentLink) => {
+        const externalEventId = String(contentLink?.externalEventId || contentLink?.remoteEventId || '');
+        const matchIndex = remainingSourceLinks.findIndex(
+          (sourceLink) =>
+            sourceLink.provider === contentLink?.provider &&
+            sourceLink.remoteEventId === externalEventId &&
+            (!contentLink?.remoteCalendarId ||
+              sourceLink.remoteCalendarId === contentLink.remoteCalendarId)
+        );
+
+        if (matchIndex === -1) {
+          return contentLink;
+        }
+
+        const [sourceLink] = remainingSourceLinks.splice(matchIndex, 1);
+        return {
+          ...contentLink,
+          sourceId: sourceLink.sourceId,
+          remoteCalendarId: contentLink.remoteCalendarId || sourceLink.remoteCalendarId,
+          mode: contentLink.mode || sourceLink.linkMode,
+        };
+      });
+
+      for (const sourceLink of remainingSourceLinks) {
+        mergedLinks.push({
+          provider: sourceLink.provider,
+          externalEventId: sourceLink.remoteEventId,
+          remoteCalendarId: sourceLink.remoteCalendarId,
+          sourceId: sourceLink.sourceId,
+          mode: sourceLink.linkMode,
+        });
+      }
+
+      return {
+        ...event,
+        externalProviderLinks: mergedLinks,
+      };
+    });
+  }
+
   isHolidayAlreadyPresent(events, countryCode, holiday) {
     const holidayTitle = holiday.name || holiday.localName || 'Public holiday';
 
@@ -2278,7 +2341,11 @@ class CalendarStore {
   }
 
   snapshot({ includeChanges = false } = {}) {
-    const events = this.listEvents(false);
+    const externalEventLinks = this.listExternalEventLinks();
+    const events = this.attachExternalSourceLinksToEvents(
+      this.listEvents(false),
+      externalEventLinks
+    );
     const changeCount = this.countChangeSummaries();
 
     const nextSnapshot = {
@@ -2287,7 +2354,7 @@ class CalendarStore {
       events,
       tags: this.getTagCatalogSnapshot(),
       externalCalendarSources: this.listExternalCalendarSources(),
-      externalEventLinks: this.listExternalEventLinks(),
+      externalEventLinks,
       stats: {
         activeEventCount: events.length,
         changeCount,
@@ -2434,6 +2501,28 @@ class CalendarStore {
       .get({ sourceId });
 
     return row ? this.rowToExternalCalendarSource(row) : null;
+  }
+
+  setExternalCalendarSourceSelected({ sourceId, selected }) {
+    const source = this.getExternalCalendarSourceById(sourceId);
+    if (!source) {
+      throw new Error('External calendar source was not found.');
+    }
+
+    this.db
+      .prepare(
+        `UPDATE external_calendar_sources
+         SET selected = :selected,
+             updated_at = :updatedAt
+         WHERE source_id = :sourceId`
+      )
+      .run({
+        sourceId,
+        selected: selected === false ? 0 : 1,
+        updatedAt: nowIso(),
+      });
+
+    return this.snapshot();
   }
 
   upsertExternalCalendarSource(input = {}) {
@@ -2778,34 +2867,28 @@ class CalendarStore {
   }
 
   shouldSyncProviderInvite(event = {}) {
-    return (
-      normalizeInviteDeliveryMode(event.inviteDeliveryMode) === 'provider_invite' &&
-      extractInviteeEmails(event.inviteRecipients).length > 0
-    );
+    return normalizeInviteDeliveryMode(event.inviteDeliveryMode) === 'provider_invite';
   }
 
   async resolveInviteTarget(event = {}) {
     const attendees = extractInviteeEmails(event.inviteRecipients);
-    if (attendees.length === 0) {
-      return null;
-    }
 
     const expectedProvider = resolveInviteProviderFromEvent(event);
     if (!expectedProvider) {
-      throw new Error('Internal events stay local. Switch the event scope to Work or Personal before sending invites.');
+      throw new Error('Internal events stay local. Choose a Google or Outlook calendar before saving to a provider.');
     }
 
     const targetProvider = normalizeInviteProvider(event.inviteTargetProvider) || expectedProvider;
     if (targetProvider !== expectedProvider) {
       throw new Error(
         expectedProvider === 'google'
-          ? 'Work events must invite through a connected Google account.'
-          : 'Personal events must invite through a connected Microsoft account.'
+          ? 'Google calendar events must use a connected Google account.'
+          : 'Outlook calendar events must use a connected Microsoft account.'
       );
     }
 
     if (!event.inviteTargetAccountId || !event.inviteTargetCalendarId) {
-      throw new Error('Choose the connected account and calendar to send invites through.');
+      throw new Error('Choose the connected account and calendar to save this provider event.');
     }
 
     const account = this.listConnectedAccounts().find(
@@ -2816,7 +2899,7 @@ class CalendarStore {
     }
 
     if (!account.canWrite || !account.writeScopeGranted) {
-      throw new Error('Reconnect the selected account with calendar write access before sending invites.');
+      throw new Error('Reconnect the selected account with calendar write access before saving provider events.');
     }
 
     const calendars = await this.oauthService.listExternalCalendars(account.accountId);
@@ -2824,7 +2907,7 @@ class CalendarStore {
       (entry) => entry.remoteCalendarId === event.inviteTargetCalendarId
     );
     if (!calendar || !this.isProviderCalendarWritable(calendar)) {
-      throw new Error('The selected calendar is not writable. Choose a writable calendar for invites.');
+      throw new Error('The selected calendar is not writable. Choose a writable calendar for provider events.');
     }
 
     return {
@@ -3941,8 +4024,11 @@ class CalendarStore {
 
   async runHostedAction(action) {
     try {
-      await action();
-      return this.snapshot();
+      const hostedResult = await action();
+      return {
+        ...this.snapshot(),
+        hostedResult,
+      };
     } catch (error) {
       const hostedState = this.hostedSyncService.getState();
       this.hostedSyncService.updateState({
@@ -3970,6 +4056,153 @@ class CalendarStore {
 
   syncHostedNow() {
     return this.runHostedAction(() => this.hostedSyncService.syncNow());
+  }
+
+  getEventShareCalendarId(event = {}) {
+    const links = Array.isArray(event.externalProviderLinks) ? event.externalProviderLinks : [];
+    const sourceLink = links.find((link) => String(link?.sourceId || '').trim());
+    return String(sourceLink?.sourceId || 'local').trim() || 'local';
+  }
+
+  buildShareCalendarCatalog(snapshot) {
+    return [
+      {
+        id: 'local',
+        label: 'Local calendar',
+        provider: 'local',
+        color: '#64748b',
+      },
+      ...(snapshot.externalCalendarSources || []).map((source) => ({
+        id: source.sourceId,
+        label: source.displayName || source.remoteCalendarId || 'Provider calendar',
+        provider: source.provider,
+        color: source.provider === 'microsoft' ? '#4d8cf5' : '#4f9d69',
+      })),
+    ];
+  }
+
+  sanitizeShareEvent(event, privacyLevel) {
+    const base = {
+      id: event.id,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      isAllDay: Boolean(event.isAllDay),
+      calendarId: this.getEventShareCalendarId(event),
+      color: privacyLevel === 'busy_only' ? '#111827' : event.color || '#4f9d69',
+    };
+
+    if (privacyLevel === 'busy_only') {
+      return {
+        ...base,
+        title: 'Busy',
+        visibility: 'busy_only',
+      };
+    }
+
+    if (privacyLevel === 'titles_only') {
+      return {
+        ...base,
+        title: event.title || 'Event',
+        type: event.type || 'meeting',
+        visibility: 'titles_only',
+      };
+    }
+
+    return {
+      ...base,
+      title: event.title || 'Event',
+      description: event.description || '',
+      type: event.type || 'meeting',
+      location: event.location || '',
+      people: event.people || [],
+      sourceTimeZone: event.sourceTimeZone || '',
+      tags: event.tags || [],
+      visibility: 'full_details',
+    };
+  }
+
+  buildCalendarShareProjection(input = {}) {
+    const snapshot = this.snapshot();
+    const scope = input.scope || {};
+    const privacyLevel = ['busy_only', 'titles_only', 'full_details'].includes(input.privacyLevel)
+      ? input.privacyLevel
+      : 'busy_only';
+    const includedCalendarIds = new Set(scope.calendarIds || []);
+    const includeAllCalendars = includedCalendarIds.size === 0;
+    const includePrivate = Boolean(scope.includePrivate);
+    const dateFrom = scope.dateFrom ? new Date(scope.dateFrom) : null;
+    const dateTo = scope.dateTo ? new Date(scope.dateTo) : null;
+
+    const events = snapshot.events
+      .filter((event) => {
+        if (!includePrivate && (event.visibility === 'private' || event.syncPolicy === 'internal_only')) {
+          return false;
+        }
+
+        const calendarId = this.getEventShareCalendarId(event);
+        if (!includeAllCalendars && !includedCalendarIds.has(calendarId)) {
+          return false;
+        }
+
+        if (dateFrom && !Number.isNaN(dateFrom.getTime()) && new Date(event.endsAt) < dateFrom) {
+          return false;
+        }
+
+        if (dateTo && !Number.isNaN(dateTo.getTime()) && new Date(event.startsAt) > dateTo) {
+          return false;
+        }
+
+        return true;
+      })
+      .map((event) => this.sanitizeShareEvent(event, privacyLevel));
+
+    const calendars = this.buildShareCalendarCatalog(snapshot).filter(
+      (calendar) => includeAllCalendars || includedCalendarIds.has(calendar.id)
+    );
+
+    return {
+      version: 'calendar-share-v1',
+      generatedAt: nowIso(),
+      privacyLevel,
+      scope: {
+        calendarIds: Array.from(includedCalendarIds),
+        dateFrom: scope.dateFrom || null,
+        dateTo: scope.dateTo || null,
+        includePrivate,
+      },
+      calendars,
+      events,
+    };
+  }
+
+  listHostedShares() {
+    return this.runHostedAction(() => this.hostedSyncService.listShares());
+  }
+
+  createHostedShare(input = {}) {
+    return this.runHostedAction(() => this.hostedSyncService.createShare(input));
+  }
+
+  updateHostedShare(input = {}) {
+    if (!input.shareId) {
+      throw new Error('Share id is required.');
+    }
+    return this.runHostedAction(() => this.hostedSyncService.updateShare(input.shareId, input.patch || {}));
+  }
+
+  revokeHostedShare(shareId) {
+    if (!shareId) {
+      throw new Error('Share id is required.');
+    }
+    return this.runHostedAction(() => this.hostedSyncService.revokeShare(shareId));
+  }
+
+  publishHostedShare(input = {}) {
+    if (!input.shareId) {
+      throw new Error('Share id is required.');
+    }
+    const projection = this.buildCalendarShareProjection(input);
+    return this.runHostedAction(() => this.hostedSyncService.publishShare(input.shareId, projection));
   }
 
   disconnectHostedSync() {

@@ -46,6 +46,7 @@ export default function CalendarViewHeader({
       </div>
 
       <div className="calendar-header-title">
+        {eyebrow ? <p className="calendar-header-eyebrow">{eyebrow}</p> : null}
         <h2 className={`calendar-title calendar-title--${titleTone}`}>{title}</h2>
       </div>
 
@@ -60,6 +61,7 @@ export default function CalendarViewHeader({
                 : ''
             }`}
             onClick={() => onChangeView?.(view)}
+            aria-pressed={calendarView === view}
           >
             {view[0].toUpperCase() + view.slice(1)}
           </button>

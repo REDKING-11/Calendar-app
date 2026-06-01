@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('calendarApp', {
   listExternalCalendars: (input) => ipcRenderer.invoke('calendar:listExternalCalendars', input),
   importExternalCalendar: (input) => ipcRenderer.invoke('calendar:importExternalCalendar', input),
   refreshExternalSource: (input) => ipcRenderer.invoke('calendar:refreshExternalSource', input),
+  setExternalCalendarSourceSelected: (input) =>
+    ipcRenderer.invoke('calendar:setExternalCalendarSourceSelected', input),
   importData: (input) => ipcRenderer.invoke('calendar:importData', input),
   importDataFromFilePicker: () => ipcRenderer.invoke('calendar:importDataFromFilePicker'),
   exportData: (input) => ipcRenderer.invoke('calendar:exportData', input),
@@ -61,6 +63,11 @@ contextBridge.exposeInMainWorld('calendarApp', {
   syncHostedNow: () => ipcRenderer.invoke('hosted:syncNow'),
   disconnectHostedSync: () => ipcRenderer.invoke('hosted:disconnect'),
   exportHostedEnv: (values) => ipcRenderer.invoke('hosted:exportEnv', values),
+  listHostedShares: () => ipcRenderer.invoke('hosted:listShares'),
+  createHostedShare: (input) => ipcRenderer.invoke('hosted:createShare', input),
+  updateHostedShare: (input) => ipcRenderer.invoke('hosted:updateShare', input),
+  revokeHostedShare: (shareId) => ipcRenderer.invoke('hosted:revokeShare', shareId),
+  publishHostedShare: (input) => ipcRenderer.invoke('hosted:publishShare', input),
   beginReauth: (action) => ipcRenderer.invoke('security:beginReauth', action),
   completeReauth: (challengeId, response) =>
     ipcRenderer.invoke('security:completeReauth', challengeId, response),

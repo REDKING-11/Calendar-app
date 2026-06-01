@@ -1,10 +1,53 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EventComposerFields from './EventComposerFields';
 import NotificationSidecar from './NotificationSidecar';
+import { clampFloatingPosition } from '../popoverPositioning';
 
 const DEFAULT_POPOVER_WIDTH = 640;
 const DEFAULT_POPOVER_HEIGHT = 360;
 const VIEWPORT_MARGIN = 16;
+
+function getProviderLabel(providerId) {
+  if (providerId === 'google') {
+    return 'Google';
+  }
+  if (providerId === 'microsoft') {
+    return 'Outlook';
+  }
+  return providerId || 'Provider';
+}
+
+function getAccountLabel(account = {}) {
+  return account.email || account.displayName || `${getProviderLabel(account.provider)} account`;
+}
+
+function getSaveTargetLabel(draftEvent = {}, connectedAccounts = [], externalCalendarSources = []) {
+  if (draftEvent.inviteDeliveryMode !== 'provider_invite' || !draftEvent.inviteTargetProvider) {
+    return {
+      tone: 'local',
+      title: 'Saving locally',
+      detail: 'This event stays in Calendar App.',
+    };
+  }
+
+  const providerLabel = getProviderLabel(draftEvent.inviteTargetProvider);
+  const account = connectedAccounts.find(
+    (item) => item.accountId === draftEvent.inviteTargetAccountId
+  );
+  const calendar = externalCalendarSources.find(
+    (source) =>
+      source.accountId === draftEvent.inviteTargetAccountId &&
+      source.remoteCalendarId === draftEvent.inviteTargetCalendarId
+  );
+
+  return {
+    tone: 'provider',
+    title: `Saving to ${providerLabel}`,
+    detail: [calendar?.displayName, account ? getAccountLabel(account) : 'selected account']
+      .filter(Boolean)
+      .join(' - '),
+  };
+}
 
 function getViewportConstrainedSize() {
   return {
@@ -13,18 +56,28 @@ function getViewportConstrainedSize() {
   };
 }
 
-function clampPopoverPosition(position) {
-  const { width, height } = getViewportConstrainedSize();
-  const left = Math.max(
-    VIEWPORT_MARGIN,
-    Math.min(Number(position?.left || VIEWPORT_MARGIN), window.innerWidth - width - VIEWPORT_MARGIN)
-  );
-  const top = Math.max(
-    VIEWPORT_MARGIN,
-    Math.min(Number(position?.top || VIEWPORT_MARGIN), window.innerHeight - height - VIEWPORT_MARGIN)
-  );
+function getPopoverSize(element) {
+  if (!element) {
+    return getViewportConstrainedSize();
+  }
 
-  return { left, top };
+  const rect = element.getBoundingClientRect();
+  return {
+    width: rect.width || DEFAULT_POPOVER_WIDTH,
+    height: rect.height || DEFAULT_POPOVER_HEIGHT,
+  };
+}
+
+function clampPopoverPosition(position, element = null) {
+  return clampFloatingPosition({
+    position,
+    size: getPopoverSize(element),
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    },
+    margin: VIEWPORT_MARGIN,
+  });
 }
 
 function getInitialPopoverPosition(anchorPoint) {
@@ -48,6 +101,7 @@ export default function QuickEventPopover({
   onOpenFullDetails,
   knownNotificationEmails,
   connectedAccounts,
+  externalCalendarSources = [],
   providers,
   onConnectProvider,
   onOpenConnectionSettings,
@@ -94,13 +148,19 @@ export default function QuickEventPopover({
       return undefined;
     }
 
+    const clampToRenderedSize = () => {
+      setPosition((current) => clampPopoverPosition(current, localPopoverRef.current));
+    };
+
+    window.requestAnimationFrame(clampToRenderedSize);
+
     const handleResize = () => {
-      setPosition((current) => clampPopoverPosition(current));
+      setPosition((current) => clampPopoverPosition(current, localPopoverRef.current));
     };
 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [isOpen]);
+  }, [isOpen, draftEvent, isNotificationOpen]);
 
   if (!isOpen || !draftEvent) {
     return null;
@@ -110,6 +170,7 @@ export default function QuickEventPopover({
   const remainingRightSpace =
     window.innerWidth - position.left - DEFAULT_POPOVER_WIDTH - VIEWPORT_MARGIN;
   const sidecarSide = remainingRightSpace >= estimatedWidth ? 'right' : 'left';
+  const saveTarget = getSaveTargetLabel(draftEvent, connectedAccounts, externalCalendarSources);
 
   const handleDragStart = (event) => {
     if (event.button !== 0) {
@@ -139,7 +200,7 @@ export default function QuickEventPopover({
       clampPopoverPosition({
         left: event.clientX - dragStateRef.current.offsetX,
         top: event.clientY - dragStateRef.current.offsetY,
-      })
+      }, localPopoverRef.current)
     );
   };
 
@@ -202,6 +263,14 @@ export default function QuickEventPopover({
             Close
           </button>
         </div>
+      </div>
+
+      <div className={`quick-save-target quick-save-target--${saveTarget.tone}`}>
+        <span className="quick-save-target-dot" aria-hidden="true" />
+        <span className="quick-save-target-copy">
+          <strong>{saveTarget.title}</strong>
+          <span>{saveTarget.detail}</span>
+        </span>
       </div>
 
       <form className="grid gap-2.5" onSubmit={onSubmit}>

@@ -4,7 +4,9 @@ import CalendarViewHeader from './CalendarViewHeader';
 import SelectedDayDetails from './SelectedDayDetails';
 import TodayScheduleControl from './TodayScheduleControl';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
+import { groupEventsByCalendar, shouldSplitCalendarGroups } from '../../calendarGrouping';
 import { createClickIntentRouter } from '../../clickIntent';
+import { buildPackedEventMap, getPackedEventStyle } from '../../eventPacking';
 import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
 const HOUR_HEIGHT = 64;
@@ -58,6 +60,7 @@ export default function WeekView({
   headerRef,
   events,
   eventDateIndex,
+  externalCalendarSources = [],
   todayEvents,
   preferences,
   timeZone,
@@ -300,38 +303,74 @@ export default function WeekView({
               </div>
 
               <div className="week-event-layer">
-                {day.events.map((event) => {
-                  const layout = getEventLayout(event);
+                {(() => {
+                  const groups = groupEventsByCalendar(day.events, externalCalendarSources);
+                  const isSplit = shouldSplitCalendarGroups(groups, preferences?.calendarSplitMode);
+                  const renderGroups = isSplit ? groups : [{ id: 'combined', label: '', events: day.events }];
 
-                  return (
-                    <button
-                      key={event.id}
-                      type="button"
-                      className={`week-event-block ${isFocusEvent(event) ? 'calendar-event-card--focus' : ''}`}
+                  return renderGroups.map((group, groupIndex) => (
+                    <div
+                      key={group.id}
+                      className="week-calendar-lane"
                       style={{
-                        top: `${layout.top}px`,
-                        height: `${layout.height}px`,
-                        backgroundColor: event.color || '#4f9d69',
+                        left: isSplit ? `${(groupIndex / renderGroups.length) * 100}%` : '0%',
+                        width: isSplit ? `${100 / renderGroups.length}%` : '100%',
                       }}
-                      onClick={(clickEvent) =>
-                        eventClickRouterRef.current.handleSingle({
-                          event,
-                          anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
-                        })
-                      }
-                      onDoubleClick={() =>
-                        eventClickRouterRef.current.handleDouble({
-                          event,
-                        })
-                      }
-                      onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
                     >
-                      <p className="calendar-event-card-title">{event.title}</p>
-                      <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
-                      <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
-                    </button>
-                  );
-                })}
+                      {isSplit ? (
+                        <div className="week-calendar-lane-label" style={{ borderColor: group.color }}>
+                          {group.label}
+                        </div>
+                      ) : null}
+                      {(() => {
+                        const packedEventMap = buildPackedEventMap(group.events);
+
+                        return group.events.map((event) => {
+                          const layout = getEventLayout(event);
+                          const packed = packedEventMap.get(event.id);
+                          const packedStyle = getPackedEventStyle(packed, 8);
+
+                          return (
+                            <button
+                              key={event.id}
+                              type="button"
+                              className={[
+                                'week-event-block',
+                                isSplit ? 'week-event-block--split' : '',
+                                packed?.columnCount > 1 ? 'week-event-block--packed calendar-event-card--narrow' : '',
+                                isFocusEvent(event) ? 'calendar-event-card--focus' : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              style={{
+                                top: `${layout.top}px`,
+                                height: `${layout.height}px`,
+                                ...packedStyle,
+                                backgroundColor: event.color || group.color || '#4f9d69',
+                              }}
+                              onClick={(clickEvent) =>
+                                eventClickRouterRef.current.handleSingle({
+                                  event,
+                                  anchorPoint: { x: clickEvent.clientX, y: clickEvent.clientY },
+                                })
+                              }
+                              onDoubleClick={() =>
+                                eventClickRouterRef.current.handleDouble({
+                                  event,
+                                })
+                              }
+                              onKeyDown={(keyboardEvent) => handleEventKeyboardOpen(keyboardEvent, event)}
+                            >
+                              <p className="calendar-event-card-title">{event.title}</p>
+                              <p className="calendar-event-card-time">{getEventTimeLabel(event, preferences)}</p>
+                              <p className="calendar-event-card-context">{getEventContextLabel(event)}</p>
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+                  ));
+                })()}
               </div>
             </div>
           ))}

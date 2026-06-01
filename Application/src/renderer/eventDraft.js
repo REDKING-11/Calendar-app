@@ -5,9 +5,24 @@ export const EVENT_TYPE_OPTIONS = [
   { id: 'personal', label: 'Personal' },
 ];
 export const EVENT_SCOPE_OPTIONS = [
-  { id: 'internal', label: 'Internal' },
-  { id: 'work', label: 'Work' },
-  { id: 'personal', label: 'Personal' },
+  {
+    id: 'internal',
+    label: 'Local',
+    shortLabel: 'Local',
+    description: 'Private to Calendar App. No provider calendar or real invites.',
+  },
+  {
+    id: 'work',
+    label: 'Google',
+    shortLabel: 'Google',
+    description: 'Uses a connected Google calendar for provider invites and provider-backed events.',
+  },
+  {
+    id: 'personal',
+    label: 'Outlook',
+    shortLabel: 'Outlook',
+    description: 'Uses a connected Outlook calendar for provider invites and provider-backed events.',
+  },
 ];
 export const DURATION_PRESET_OPTIONS = [
   { id: 30, label: '30m' },
@@ -22,8 +37,16 @@ export const REMINDER_UNIT_OPTIONS = [
   { id: 'days', label: 'Days' },
 ];
 export const INVITE_DELIVERY_MODE_OPTIONS = [
-  { id: 'local_only', label: 'Save locally only' },
-  { id: 'provider_invite', label: 'Send calendar invites' },
+  {
+    id: 'local_only',
+    label: 'Save locally',
+    description: 'Keep the event in Calendar App only. Invitee emails are stored but not sent.',
+  },
+  {
+    id: 'provider_invite',
+    label: 'Save to calendar',
+    description: 'Create the event on the selected Google or Outlook calendar. Guests are optional.',
+  },
 ];
 
 const EVENT_TYPE_ALIASES = {
@@ -243,9 +266,49 @@ export function scopeToInviteProvider(scope = 'internal') {
   return '';
 }
 
+export function providerToDraftScope(provider = '') {
+  const normalizedProvider = normalizeInviteProvider(provider);
+  if (normalizedProvider === 'google') {
+    return 'work';
+  }
+  if (normalizedProvider === 'microsoft') {
+    return 'personal';
+  }
+  return 'internal';
+}
+
 export function normalizeInviteProvider(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   return ['google', 'microsoft'].includes(normalized) ? normalized : '';
+}
+
+export function applyCalendarContextToDraft(
+  draft,
+  context,
+  { autoSaveToProvider = false } = {}
+) {
+  if (!context || context.provider === 'local') {
+    return {
+      ...draft,
+      scope: 'internal',
+      inviteTargetProvider: '',
+      inviteTargetAccountId: '',
+      inviteTargetCalendarId: '',
+      inviteDeliveryMode: 'local_only',
+    };
+  }
+
+  const scope = normalizeEventScope(context.scope || providerToDraftScope(context.provider));
+  const provider = normalizeInviteProvider(context.provider || scopeToInviteProvider(scope));
+
+  return {
+    ...draft,
+    scope,
+    inviteTargetProvider: provider,
+    inviteTargetAccountId: context.accountId || '',
+    inviteTargetCalendarId: context.calendarId || '',
+    inviteDeliveryMode: autoSaveToProvider ? 'provider_invite' : 'local_only',
+  };
 }
 
 export function extractInviteeEmails(value = []) {

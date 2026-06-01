@@ -146,6 +146,25 @@ CREATE TABLE IF NOT EXISTS event_content (
   CONSTRAINT fk_event_content_event FOREIGN KEY (event_id) REFERENCES events_metadata(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS calendar_shares (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  privacy_level VARCHAR(32) NOT NULL DEFAULT 'busy_only',
+  scope_json JSON NOT NULL,
+  projection_json LONGTEXT NULL,
+  projection_updated_at DATETIME(6) NULL,
+  expires_at DATETIME(6) NULL,
+  revoked_at DATETIME(6) NULL,
+  last_accessed_at DATETIME(6) NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  CONSTRAINT fk_calendar_shares_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_calendar_shares_user_updated (user_id, updated_at),
+  INDEX idx_calendar_shares_token_hash (token_hash)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id CHAR(36) PRIMARY KEY,
   user_id CHAR(36) NULL,

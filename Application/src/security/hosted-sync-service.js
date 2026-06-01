@@ -676,6 +676,47 @@ class HostedSyncService {
     };
   }
 
+  async listShares() {
+    return this.authorizedRequest({
+      method: 'GET',
+      path: '/v1/shares',
+    });
+  }
+
+  async createShare(input = {}) {
+    return this.authorizedRequest({
+      method: 'POST',
+      path: '/v1/shares',
+      body: input,
+    });
+  }
+
+  async updateShare(shareId, input = {}) {
+    return this.authorizedRequest({
+      method: 'PATCH',
+      path: `/v1/shares/${encodeURIComponent(shareId)}`,
+      body: input,
+    });
+  }
+
+  async revokeShare(shareId) {
+    return this.authorizedRequest({
+      method: 'POST',
+      path: `/v1/shares/${encodeURIComponent(shareId)}/revoke`,
+      body: {},
+    });
+  }
+
+  async publishShare(shareId, projection = {}) {
+    return this.authorizedRequest({
+      method: 'POST',
+      path: `/v1/shares/${encodeURIComponent(shareId)}/publish`,
+      body: {
+        projection,
+      },
+    });
+  }
+
   buildEnvFile(values) {
     return buildSelfHdbEnv(values);
   }
