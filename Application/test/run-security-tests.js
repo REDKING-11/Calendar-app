@@ -65,6 +65,9 @@ const calendarContextPersistence = loadTranspiledModule(
 const popoverPositioning = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'popoverPositioning.js')
 );
+const externalCalendarDeletion = loadTranspiledModule(
+  path.join(__dirname, '..', 'src', 'renderer', 'externalCalendarDeletion.js')
+);
 const calendarGrouping = loadTranspiledModule(
   path.join(__dirname, '..', 'src', 'renderer', 'calendarGrouping.js')
 );
@@ -232,11 +235,18 @@ function testDeveloperModePreferenceAndDebugRedaction() {
   try {
     const preferences = preferencesModule.getStoredPreferences();
     assert.equal(preferences.developerMode, false);
+    assert.equal(preferences.providerLiveUpdatesBeta, false);
     preferencesModule.persistPreferences({
       ...preferences,
       developerMode: true,
+      providerLiveUpdatesBeta: true,
     });
     assert.equal(global.window.localStorage.getItem(preferencesModule.STORAGE_KEYS.developerMode), 'true');
+    assert.equal(
+      global.window.localStorage.getItem(preferencesModule.STORAGE_KEYS.providerLiveUpdatesBeta),
+      'true'
+    );
+    assert.equal(preferencesModule.getStoredPreferences().providerLiveUpdatesBeta, true);
   } finally {
     global.window = previousWindow;
   }
@@ -450,6 +460,38 @@ function testPopoverPositioningHelpers() {
       left: 16,
       top: 16,
     }
+  );
+}
+
+function testExternalCalendarDeletionHelpers() {
+  const snapshot = {
+    externalCalendarSources: [
+      { sourceId: 'source_google' },
+      { sourceId: 'source_outlook' },
+    ],
+  };
+
+  assert.equal(
+    externalCalendarDeletion.isExternalCalendarSourcePresent(snapshot, 'source_google'),
+    true
+  );
+  assert.equal(
+    externalCalendarDeletion.isExternalCalendarSourcePresent(snapshot, 'missing'),
+    false
+  );
+  assert.equal(
+    externalCalendarDeletion.getExternalCalendarDeleteResultMessage({
+      label: 'Family',
+      deletedEventCount: 1,
+    }),
+    'Deleted imported calendar "Family" and removed 1 imported event.'
+  );
+  assert.equal(
+    externalCalendarDeletion.getExternalCalendarDeleteResultMessage({
+      label: 'Work',
+      deletedEventCount: 3,
+    }),
+    'Deleted imported calendar "Work" and removed 3 imported events.'
   );
 }
 
@@ -991,6 +1033,78 @@ function testResponsiveEventPackingHelpers() {
       visibleEvents: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ id })),
       hiddenCount: 1,
     }
+  );
+}
+
+function testMonthEventCapacityHelpers() {
+  const events = ['a', 'b', 'c'].map((id) => ({ id }));
+
+  const roomy = eventPacking.getMonthVisibleEventsBySpace(events, {
+    width: 300,
+    height: 88,
+  });
+  assert.equal(roomy.columns, 2);
+  assert.equal(roomy.hiddenCount, 0);
+  assert.deepEqual(roomy.visibleEvents.map((event) => event.id), ['a', 'b', 'c']);
+
+  const narrow = eventPacking.getMonthVisibleEventsBySpace(events, {
+    width: 120,
+    height: 130,
+  });
+  assert.equal(narrow.columns, 1);
+  assert.equal(narrow.hiddenCount, 0);
+  assert.deepEqual(narrow.visibleEvents.map((event) => event.id), ['a', 'b', 'c']);
+
+  const crowded = eventPacking.getMonthVisibleEventsBySpace(
+    ['a', 'b', 'c', 'd'].map((id) => ({ id })),
+    {
+      width: 300,
+      height: 35,
+    }
+  );
+  assert.deepEqual(crowded.visibleEvents.map((event) => event.id), ['a', 'b']);
+  assert.equal(crowded.hiddenCount, 2);
+
+  const splitLane = eventPacking.getMonthVisibleEventsBySpace(events, {
+    width: 210,
+    height: 60,
+  }, {
+    hasLaneLabel: true,
+    minCardWidth: 96,
+    minCardHeight: 34,
+  });
+  assert.equal(splitLane.columns, 2);
+  assert.equal(splitLane.visibleEvents.length, 2);
+  assert.equal(splitLane.hiddenCount, 1);
+}
+
+function testSelectedMonthAgendaHelpers() {
+  const makeEvent = (id, year, monthIndex, day, hour) => ({
+    id,
+    title: id,
+    startsAt: new Date(year, monthIndex, day, hour, 0, 0, 0).toISOString(),
+    endsAt: new Date(year, monthIndex, day, hour + 1, 0, 0, 0).toISOString(),
+  });
+  const agenda = eventPacking.buildSelectedMonthAgenda(
+    [
+      makeEvent('later', 2026, 5, 22, 14),
+      makeEvent('earlier', 2026, 5, 22, 9),
+      makeEvent('next_day', 2026, 5, 23, 8),
+      makeEvent('other_month', 2026, 6, 1, 8),
+    ],
+    new Date(2026, 5, 1)
+  );
+
+  assert.deepEqual(
+    agenda.map((group) => [group.date.getDate(), group.events.map((event) => event.id)]),
+    [
+      [22, ['earlier', 'later']],
+      [23, ['next_day']],
+    ]
+  );
+  assert.deepEqual(
+    eventPacking.buildSelectedMonthAgenda([], new Date(2026, 5, 1)),
+    []
   );
 }
 
@@ -1883,26 +1997,129 @@ function testHostedShareProjectionSanitizesBusyOnly() {
       privacyLevel: 'busy_only',
       scope: {
         calendarIds: [],
-        includePrivate: false,
+        privateMode: 'busy',
       },
     });
 
     assert.equal(projection.version, 'calendar-share-v1');
     assert.equal(projection.privacyLevel, 'busy_only');
-    assert.equal(projection.events.length, 1);
+    assert.equal(projection.scope.privateMode, 'busy');
+    assert.equal(projection.events.length, 2);
     assert.equal(projection.events[0].title, 'Busy');
     assert.equal(projection.events[0].location, undefined);
     assert.equal(projection.events[0].people, undefined);
     assert.equal(projection.events[0].description, undefined);
     assert.equal(projection.events[0].tags, undefined);
     assert.equal(projection.events[0].color, '#111827');
+    assert.equal(projection.events[1].title, 'Busy');
+    assert.equal(projection.events[1].location, undefined);
 
     const titlesProjection = fixture.store.buildCalendarShareProjection({
       privacyLevel: 'titles_only',
-      scope: { includePrivate: false },
+      scope: { privateMode: 'busy' },
     });
     assert.equal(titlesProjection.events[0].title, 'Visible strategy');
+    assert.equal(titlesProjection.events[1].title, 'Busy');
     assert.equal(titlesProjection.events[0].location, undefined);
+
+    const hiddenPrivateProjection = fixture.store.buildCalendarShareProjection({
+      privacyLevel: 'busy_only',
+      scope: { privateMode: 'hide' },
+    });
+    assert.equal(hiddenPrivateProjection.events.length, 1);
+    assert.equal(hiddenPrivateProjection.events[0].id, projection.events[0].id);
+
+    const fullPrivateProjection = fixture.store.buildCalendarShareProjection({
+      privacyLevel: 'full_details',
+      scope: { privateMode: 'details' },
+    });
+    assert.equal(fullPrivateProjection.events.length, 2);
+    assert.equal(fullPrivateProjection.events[1].title, 'Private local event');
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+async function testHostedRegisterPayloadAndShareTokenRotation() {
+  const fixture = createStoreFixture('calendar-store-hosted-register-');
+  const requests = [];
+
+  fixture.store.hostedSyncService.fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(url);
+    const body = options.body ? JSON.parse(options.body) : null;
+    requests.push({ path: parsed.pathname, method: options.method || 'GET', body });
+
+    const payloads = {
+      '/v1/health': { result: { status: 'ok' } },
+      '/v1/bootstrap/status': {
+        result: {
+          claimed: true,
+          enabledProviders: ['password'],
+          authMode: 'local_password',
+        },
+      },
+      '/v1/auth/register': {
+        result: {
+          user: { id: 'user_1', email: body?.email, role: 'member' },
+          device: { id: body?.device?.id, name: body?.device?.name },
+          sessionId: 'session_1',
+          accessToken: 'access-token',
+          refreshToken: 'refresh-token',
+          accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          refreshTokenExpiresAt: new Date(Date.now() + 600_000).toISOString(),
+          syncState: { serverCursor: 0 },
+        },
+      },
+      '/v1/shares/share_1/rotate-token': {
+        result: {
+          id: 'share_1',
+          name: 'Shared availability',
+          accessMode: 'link',
+          privacyLevel: 'busy_only',
+          scope: {},
+          url: 'https://selfhdb.test/share/new-token',
+        },
+      },
+    };
+
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get(name) {
+          return name.toLowerCase() === 'content-type' ? 'application/json' : '';
+        },
+      },
+      async json() {
+        return payloads[parsed.pathname] || { result: {} };
+      },
+    };
+  };
+
+  try {
+    await fixture.store.registerHostedAccount({
+      baseUrl: 'https://selfhdb.test',
+      email: 'student@example.com',
+      password: 'password123',
+      displayName: 'Student Example',
+      inviteKey: 'invite-key-123',
+      deviceName: 'Laptop',
+    });
+
+    const registerRequest = requests.find((request) => request.path === '/v1/auth/register');
+    assert.equal(registerRequest.body.displayName, 'Student Example');
+    assert.equal(registerRequest.body.inviteKey, 'invite-key-123');
+    assert.equal(registerRequest.body.device.name, 'Laptop');
+
+    const rotated = await fixture.store.rotateHostedShareToken('share_1');
+    assert.equal(rotated.hostedResult.url, 'https://selfhdb.test/share/new-token');
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.path === '/v1/shares/share_1/rotate-token' && request.method === 'POST'
+      ),
+      true
+    );
   } finally {
     fixture.cleanup();
   }
@@ -2410,6 +2627,210 @@ async function testExternalCalendarImportRefreshAndDetach() {
   }
 }
 
+async function testImportedProviderDeleteWriteback() {
+  const fixture = createStoreFixture('calendar-store-imported-delete-writeback-');
+
+  try {
+    fixture.store.oauthService.listExternalCalendars = async () => [
+      {
+        accountId: 'acct_google',
+        provider: 'google',
+        remoteCalendarId: 'remote_cal_delete',
+        displayName: 'Delete writeback',
+        selected: true,
+      },
+    ];
+    fixture.store.oauthService.listExternalEvents = async () => ({
+      provider: 'google',
+      remoteCalendarId: 'remote_cal_delete',
+      events: [
+        {
+          provider: 'google',
+          remoteCalendarId: 'remote_cal_delete',
+          remoteEventId: 'remote_delete_me',
+          remoteVersion: 'v1',
+          remoteDeleted: false,
+          title: 'Delete me remotely',
+          description: '',
+          location: '',
+          people: [],
+          type: 'meeting',
+          completed: false,
+          repeat: 'none',
+          hasDeadline: false,
+          groupName: '',
+          startsAt: '2026-04-16T09:00:00.000Z',
+          endsAt: '2026-04-16T10:00:00.000Z',
+          isAllDay: false,
+          sourceTimeZone: 'Europe/Helsinki',
+          color: '#4f9d69',
+          tags: [],
+          syncPolicy: 'internal_only',
+          visibility: 'private',
+          externalProviderLinks: [
+            { provider: 'google', externalEventId: 'remote_delete_me', url: '' },
+          ],
+        },
+      ],
+      syncCursor: null,
+    });
+
+    const providerDeletes = [];
+    fixture.store.oauthService.deleteOutboundCalendarEvent = async (input) => {
+      providerDeletes.push(input);
+      return { removed: true };
+    };
+
+    const importResult = await fixture.store.importExternalCalendar({
+      accountId: 'acct_google',
+      remoteCalendarId: 'remote_cal_delete',
+    });
+    const importedEvent = importResult.snapshot.events.find(
+      (event) => event.title === 'Delete me remotely'
+    );
+    assert.equal(importedEvent.externalProviderLinks[0].mode, 'imported');
+
+    const deleteSnapshot = await fixture.store.deleteEvent(importedEvent.id, {
+      deleteImportedProvider: true,
+    });
+
+    assert.deepEqual(providerDeletes, [
+      {
+        accountId: 'acct_google',
+        remoteCalendarId: 'remote_cal_delete',
+        remoteEventId: 'remote_delete_me',
+      },
+    ]);
+    assert.equal(fixture.store.getEventById(importedEvent.id)?.deleted, true);
+    assert.equal(
+      deleteSnapshot.externalEventLinks.find((link) => link.eventId === importedEvent.id)
+        ?.syncStatus,
+      'removed'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+async function testDeleteExternalCalendarSourceRemovesImportedEvents() {
+  const fixture = createStoreFixture('calendar-store-delete-external-source-');
+
+  try {
+    fixture.store.oauthService.listExternalCalendars = async () => [
+      {
+        accountId: 'acct_google',
+        provider: 'google',
+        remoteCalendarId: 'remote_cal_remove',
+        displayName: 'Remove import',
+        selected: true,
+      },
+    ];
+    fixture.store.oauthService.listExternalEvents = async () => ({
+      provider: 'google',
+      remoteCalendarId: 'remote_cal_remove',
+      events: [
+        {
+          provider: 'google',
+          remoteCalendarId: 'remote_cal_remove',
+          remoteEventId: 'remote_remove_a',
+          remoteVersion: 'v1',
+          remoteDeleted: false,
+          title: 'Remove imported A',
+          description: '',
+          location: '',
+          people: [],
+          type: 'meeting',
+          completed: false,
+          repeat: 'none',
+          hasDeadline: false,
+          groupName: '',
+          startsAt: '2026-04-16T09:00:00.000Z',
+          endsAt: '2026-04-16T10:00:00.000Z',
+          isAllDay: false,
+          sourceTimeZone: 'Europe/Helsinki',
+          color: '#4f9d69',
+          tags: [],
+          syncPolicy: 'internal_only',
+          visibility: 'private',
+          externalProviderLinks: [
+            { provider: 'google', externalEventId: 'remote_remove_a', url: '' },
+          ],
+        },
+        {
+          provider: 'google',
+          remoteCalendarId: 'remote_cal_remove',
+          remoteEventId: 'remote_remove_b',
+          remoteVersion: 'v1',
+          remoteDeleted: false,
+          title: 'Remove imported B',
+          description: '',
+          location: '',
+          people: [],
+          type: 'meeting',
+          completed: false,
+          repeat: 'none',
+          hasDeadline: false,
+          groupName: '',
+          startsAt: '2026-04-17T09:00:00.000Z',
+          endsAt: '2026-04-17T10:00:00.000Z',
+          isAllDay: false,
+          sourceTimeZone: 'Europe/Helsinki',
+          color: '#4f9d69',
+          tags: [],
+          syncPolicy: 'internal_only',
+          visibility: 'private',
+          externalProviderLinks: [
+            { provider: 'google', externalEventId: 'remote_remove_b', url: '' },
+          ],
+        },
+      ],
+      syncCursor: null,
+    });
+
+    const importResult = await fixture.store.importExternalCalendar({
+      accountId: 'acct_google',
+      remoteCalendarId: 'remote_cal_remove',
+    });
+    const localSnapshot = await fixture.store.createEvent({
+      title: 'Keep local event',
+      description: '',
+      type: 'meeting',
+      completed: false,
+      repeat: 'none',
+      hasDeadline: false,
+      groupName: '',
+      location: '',
+      people: [],
+      startsAt: '2026-04-18T09:00:00.000Z',
+      endsAt: '2026-04-18T10:00:00.000Z',
+      isAllDay: false,
+      sourceTimeZone: 'Europe/Helsinki',
+      color: '#4f9d69',
+      tags: [],
+      syncPolicy: 'internal_only',
+      visibility: 'private',
+    });
+    const localEvent = localSnapshot.events.find((event) => event.title === 'Keep local event');
+    const importedEventIds = importResult.snapshot.events.map((event) => event.id);
+
+    const result = fixture.store.deleteExternalCalendarSource({
+      sourceId: importResult.source.sourceId,
+      deleteEvents: true,
+    });
+
+    assert.equal(result.deletedEventCount, 2);
+    assert.equal(result.snapshot.externalCalendarSources.length, 0);
+    assert.equal(result.snapshot.externalEventLinks.length, 0);
+    assert.equal(fixture.store.getEventById(localEvent.id)?.deleted, false);
+    assert.deepEqual(
+      importedEventIds.map((eventId) => fixture.store.getEventById(eventId)?.deleted),
+      [true, true]
+    );
+  } finally {
+    fixture.cleanup();
+  }
+}
+
 function testBundleAndIcsImportExport() {
   const sourceFixture = createStoreFixture('calendar-store-bundle-source-');
   const targetFixture = createStoreFixture('calendar-store-bundle-target-');
@@ -2863,6 +3284,7 @@ async function main() {
     ['composer_routing_helpers', testComposerRoutingHelpers],
     ['calendar_context_persistence_helpers', testCalendarContextPersistenceHelpers],
     ['popover_positioning_helpers', testPopoverPositioningHelpers],
+    ['external_calendar_deletion_helpers', testExternalCalendarDeletionHelpers],
     ['month_tile_month_labels', testMonthTileMonthLabels],
     ['month_tiles_keep_all_same_day_events', testMonthTilesKeepAllSameDayEvents],
     ['header_date_range_formatting', testHeaderDateRangeFormatting],
@@ -2870,6 +3292,8 @@ async function main() {
     ['event_scope_helpers', testEventScopeHelpers],
     ['calendar_grouping_helpers', testCalendarGroupingHelpers],
     ['responsive_event_packing_helpers', testResponsiveEventPackingHelpers],
+    ['month_event_capacity_helpers', testMonthEventCapacityHelpers],
+    ['selected_month_agenda_helpers', testSelectedMonthAgendaHelpers],
     ['flexible_duration_and_all_day_drafts', testFlexibleDurationAndAllDayDrafts],
     ['reminder_helpers_and_validation', testReminderHelpersAndValidation],
     ['encrypted_at_rest', testEncryptedAtRest],
@@ -2881,7 +3305,10 @@ async function main() {
     ['legacy_demo_seed_cleanup', testLegacyDemoSeedCleanup],
     ['hosted_envelope_projection', testHostedEnvelopeProjection],
     ['hosted_share_projection_sanitizes_busy_only', testHostedShareProjectionSanitizesBusyOnly],
+    ['hosted_register_payload_and_share_token_rotation', testHostedRegisterPayloadAndShareTokenRotation],
     ['external_calendar_import_refresh_and_detach', testExternalCalendarImportRefreshAndDetach],
+    ['imported_provider_delete_writeback', testImportedProviderDeleteWriteback],
+    ['delete_external_calendar_source_removes_imported_events', testDeleteExternalCalendarSourceRemovesImportedEvents],
     ['outbound_provider_invite_flow', testOutboundProviderInviteFlow],
     ['bundle_and_ics_import_export', testBundleAndIcsImportExport],
     ['file_picker_import_flow', testFilePickerImportFlow],

@@ -1,0 +1,188 @@
+Calendar App - VIP Implementation Change Notes
+Document ID: 040601
+Date: 2026-06-04
+Status: VIP / active project note
+Format: plain text documentation summary
+
+This note records the recent Calendar App work from the current implementation
+pass only. It intentionally does not copy the older early-development notes or
+the earlier 0-to-06 documentation content.
+
+
+1. Front-page calendar usability polish
+---------------------------------------
+
+The main calendar screen was improved to make the app more useful with multiple
+calendars and crowded dates.
+
+Month view:
+- Month day cells now measure their available event area.
+- Same-day events can use both horizontal and vertical space.
+- Three events can show in a 2+1 or stacked layout when there is room.
+- A +N more indicator is only used when the visible cell area is genuinely full.
+- Event click, double-click, keyboard behavior, colors, and split/combined
+  calendar behavior were preserved.
+
+Day and week views:
+- Existing timed-event overlap packing was kept.
+- Split calendar lanes were made clearer with stronger lane labels.
+- Narrow packed cards now use tighter title/time/context behavior.
+
+Year view:
+- Year view now has a selected-month agenda panel.
+- Clicking a mini month selects it and updates the agenda.
+- Double-clicking or pressing Enter opens that month.
+- Agenda events use the normal event open/edit flow.
+- The layout stacks on narrower screens.
+
+Sidebar and quick create:
+- The active "Using" calendar is more obvious.
+- Calendar rows now show provider/account context under the calendar name.
+- Quick create shows clearer save target text, such as saving locally or saving
+  to a selected Google/Outlook calendar.
+
+
+2. Provider calendar live updates beta
+--------------------------------------
+
+A beta setting was added for live provider updates.
+
+Setting:
+- Enable beta live updates for imported Google/Outlook calendars.
+- Default is off.
+- Turning it on requires a confirmation warning.
+
+Behavior when enabled:
+- Calendar App periodically refreshes already-imported visible Google/Outlook
+  calendars.
+- Remote provider changes and removals can flow into Calendar App.
+- The refresh loop only targets imported provider calendars; it does not import
+  every calendar from a connected account automatically.
+- Provider-backed outbound events continue to use the existing provider
+  create/update/delete paths.
+
+Safety behavior:
+- The feature is intentionally labeled beta.
+- Users are warned that live updates can affect provider-backed behavior.
+- Imported calendars must still be chosen/imported explicitly.
+
+
+3. Imported provider event delete writeback
+-------------------------------------------
+
+Deleting individual imported provider events was extended for the live-update
+beta path.
+
+Behavior:
+- If beta live updates are enabled and an imported provider event is deleted,
+  Calendar App asks for confirmation before deleting the remote event.
+- Confirming deletes the event from the provider calendar through the existing
+  provider calendar delete API.
+- The local imported event is then marked deleted.
+- Imported provider links are marked removed.
+
+Non-goals:
+- Editing imported provider events and pushing edits back to Google/Outlook was
+  not completed in this pass.
+- Full two-way conflict resolution is still future work.
+
+
+4. Imported calendar deletion
+-----------------------------
+
+Calendar App now supports deleting an imported calendar source from the app.
+
+Behavior:
+- The imported calendar source is removed from Calendar App.
+- Active events imported from that source are marked deleted locally.
+- External event links for that source are removed through database cascade.
+- The actual Google/Outlook calendar itself is not deleted from the provider.
+
+Backend and IPC:
+- A store method was added for deleting an external calendar source.
+- IPC/preload support was added with calendar:deleteExternalCalendarSource.
+- The delete operation returns a snapshot and deleted event count.
+- The operation records an audit event with provider/source details.
+
+Safety:
+- Deleting an imported calendar requires confirmation.
+- If the deleted calendar was the active "Using" calendar, the app falls back to
+  the local calendar.
+
+
+5. Sidebar context menu cleanup
+-------------------------------
+
+The visible X delete button was removed from calendar rows because it took space
+and was too easy to hit.
+
+New behavior:
+- Right-click an imported calendar in the sidebar to open a context menu.
+- The menu contains:
+  - Use for new events
+  - Show/Hide from view
+  - Delete imported calendar
+- Local calendar does not show the delete option.
+
+Context menu reliability fixes:
+- The menu is rendered through a React portal into document.body.
+- The menu has a high z-index so it appears above the sidebar, calendar, cards,
+  and popovers.
+- Outside-click handling ignores clicks inside the context menu.
+- Menu actions fire on mouse down so the menu cannot close before the button
+  action runs.
+
+
+6. Delete reliability and feedback pass
+---------------------------------------
+
+The imported-calendar delete action was made explicit and self-verifying because
+the earlier version could fail silently.
+
+Improvements:
+- The delete context-menu item awaits the delete operation.
+- The delete item shows "Deleting..." while the request is active.
+- The item is disabled during deletion.
+- After deletion, Calendar App forces a fresh snapshot refresh.
+- The app verifies that the deleted source id is no longer present.
+- If the source is still present after refresh, a visible warning is shown.
+- IPC/preload/store errors are surfaced through visible status/toast behavior
+  and alerts instead of only hidden status text.
+
+Helper added:
+- externalCalendarDeletion.js
+  - Checks whether a source id is still present after refresh.
+  - Builds consistent success messages for imported-calendar deletion.
+
+
+7. Verification completed
+-------------------------
+
+The following checks were run during the implementation passes:
+- npm test
+- Focused Babel/JSX transforms for changed renderer files
+- Focused transforms for preload, IPC, store, and helper files when relevant
+- git diff --check
+
+Known build note:
+- npm run package can fail on Windows with an EPERM rename inside .webpack if
+  Calendar App/Electron is still running and locking build output files.
+- Close Calendar App fully before packaging.
+
+
+8. Current limitations
+----------------------
+
+Live provider updates are still beta.
+
+Still not complete:
+- Full imported-event edit writeback to Google/Outlook.
+- Conflict resolution when both provider and local copies change.
+- Automatic import of newly added provider calendars.
+
+Current intended model:
+- Imported calendars are explicitly chosen by the user.
+- Live refresh applies to already-imported provider calendars.
+- Imported calendar deletion removes that imported source from Calendar App,
+  not the actual provider calendar itself.
+

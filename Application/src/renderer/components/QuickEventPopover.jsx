@@ -42,8 +42,8 @@ function getSaveTargetLabel(draftEvent = {}, connectedAccounts = [], externalCal
 
   return {
     tone: 'provider',
-    title: `Saving to ${providerLabel}`,
-    detail: [calendar?.displayName, account ? getAccountLabel(account) : 'selected account']
+    title: `Saving to ${providerLabel}${calendar?.displayName ? ` / ${calendar.displayName}` : ''}`,
+    detail: [account ? getAccountLabel(account) : 'selected account', 'guests optional']
       .filter(Boolean)
       .join(' - '),
   };

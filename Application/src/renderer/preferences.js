@@ -22,6 +22,7 @@ export const STORAGE_KEYS = {
   defaultQuickSendFrom: 'calendar-settings-default-quick-send-from',
   defaultQuickDuration: 'calendar-settings-default-quick-duration',
   autoSaveToSelectedProviderCalendar: 'calendar-settings-auto-save-selected-provider-calendar',
+  providerLiveUpdatesBeta: 'calendar-settings-provider-live-updates-beta',
   lastGoogleInviteTarget: 'calendar-settings-last-google-invite-target',
   lastMicrosoftInviteTarget: 'calendar-settings-last-microsoft-invite-target',
 };
@@ -44,6 +45,7 @@ export const DEFAULT_PREFERENCES = {
   defaultQuickSendFrom: 'internal',
   defaultQuickDuration: 60,
   autoSaveToSelectedProviderCalendar: true,
+  providerLiveUpdatesBeta: false,
   lastGoogleInviteTarget: null,
   lastMicrosoftInviteTarget: null,
   notificationEmail: '',
@@ -115,6 +117,9 @@ export function getStoredPreferences() {
     autoSaveToSelectedProviderCalendar:
       (storage?.getItem(STORAGE_KEYS.autoSaveToSelectedProviderCalendar) ??
         String(DEFAULT_PREFERENCES.autoSaveToSelectedProviderCalendar)) === 'true',
+    providerLiveUpdatesBeta:
+      (storage?.getItem(STORAGE_KEYS.providerLiveUpdatesBeta) ??
+        String(DEFAULT_PREFERENCES.providerLiveUpdatesBeta)) === 'true',
     lastGoogleInviteTarget: readJsonPreference(
       storage,
       STORAGE_KEYS.lastGoogleInviteTarget,
@@ -185,6 +190,10 @@ export function persistPreferences(preferences) {
       preferences.autoSaveToSelectedProviderCalendar ??
         DEFAULT_PREFERENCES.autoSaveToSelectedProviderCalendar
     )
+  );
+  storage.setItem(
+    STORAGE_KEYS.providerLiveUpdatesBeta,
+    String(preferences.providerLiveUpdatesBeta ?? DEFAULT_PREFERENCES.providerLiveUpdatesBeta)
   );
   storage.setItem(
     STORAGE_KEYS.lastGoogleInviteTarget,

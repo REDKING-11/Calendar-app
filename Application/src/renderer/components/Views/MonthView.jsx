@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { buildMonthTiles, getWeekdayLabels } from '../calendar-helpers';
 import CalendarViewHeader from './CalendarViewHeader';
 import TodayScheduleControl from './TodayScheduleControl';
@@ -6,6 +6,7 @@ import { formatMonthYear } from '../../formatting';
 import { getEventContextLabel, getEventTimeLabel, isFocusEvent } from '../eventPresentation';
 import { groupEventsByCalendar, shouldSplitCalendarGroups } from '../../calendarGrouping';
 import { createClickIntentRouter } from '../../clickIntent';
+import { getMonthVisibleEventsBySpace } from '../../eventPacking';
 import { getGridNavigationIndex, isGridNavigationKey } from '../../keyboardNavigation';
 
 function getAnchorFromElement(element) {
@@ -55,6 +56,8 @@ export default function MonthView({
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
   const [focusedDateKey, setFocusedDateKey] = useState('');
+  const [eventAreaSizes, setEventAreaSizes] = useState({});
+  const monthGridRef = useRef(null);
   const slotHandlersRef = useRef({ onSingle() {}, onDouble() {} });
   const eventHandlersRef = useRef({ onSingle() {}, onDouble() {} });
   const slotClickRouterRef = useRef(null);
@@ -70,6 +73,43 @@ export default function MonthView({
   const monthTitle = formatMonthYear(viewDate);
   const preferredDateKey = getPreferredMonthTileKey(tiles, selectedDate);
   const activeDateKey = focusedDateKey || preferredDateKey;
+
+  const updateEventAreaSizes = useCallback(() => {
+    const gridElement = monthGridRef.current;
+    if (!gridElement) {
+      return;
+    }
+
+    const nextSizes = {};
+    gridElement.querySelectorAll('[data-month-event-area]').forEach((element) => {
+      const key = element.getAttribute('data-month-event-area');
+      if (!key) {
+        return;
+      }
+
+      nextSizes[key] = {
+        width: element.clientWidth,
+        height: element.clientHeight,
+      };
+    });
+
+    setEventAreaSizes((current) => {
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(nextSizes);
+      const hasSameKeys =
+        currentKeys.length === nextKeys.length &&
+        currentKeys.every((key) => Object.prototype.hasOwnProperty.call(nextSizes, key));
+      const hasSameValues =
+        hasSameKeys &&
+        nextKeys.every(
+          (key) =>
+            current[key]?.width === nextSizes[key].width &&
+            current[key]?.height === nextSizes[key].height
+        );
+
+      return hasSameValues ? current : nextSizes;
+    });
+  }, []);
 
   slotHandlersRef.current.onSingle = ({ date, anchorPoint }) => {
     onSelectDate?.(date);
@@ -129,6 +169,22 @@ export default function MonthView({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    updateEventAreaSizes();
+
+    const gridElement = monthGridRef.current;
+    if (!gridElement || typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateEventAreaSizes);
+      return () => window.removeEventListener('resize', updateEventAreaSizes);
+    }
+
+    const observer = new ResizeObserver(() => updateEventAreaSizes());
+    observer.observe(gridElement);
+    gridElement.querySelectorAll('[data-month-event-area]').forEach((element) => observer.observe(element));
+
+    return () => observer.disconnect();
+  }, [tiles, preferences?.calendarSplitMode, updateEventAreaSizes]);
+
   return (
     <section className="calendar-card calendar-card--month relative flex h-full min-h-0 flex-col rounded-[28px] p-5">
       <CalendarViewHeader
@@ -156,7 +212,13 @@ export default function MonthView({
         ))}
       </div>
 
-      <div className="calendar-grid flex-1" role="grid" aria-label={monthTitle} data-calendar-grid="month">
+      <div
+        ref={monthGridRef}
+        className="calendar-grid flex-1"
+        role="grid"
+        aria-label={monthTitle}
+        data-calendar-grid="month"
+      >
         {tiles.map((tile, tileIndex) => (
           <article
             key={tile.key}
@@ -253,13 +315,36 @@ export default function MonthView({
               ]
                 .filter(Boolean)
                 .join(' ')}
+              data-month-event-area={tile.key}
             >
               {(() => {
                 const groups = groupEventsByCalendar(tile.events, externalCalendarSources);
                 const isSplit = shouldSplitCalendarGroups(groups, preferences?.calendarSplitMode);
                 const renderGroups = isSplit ? groups : [{ id: 'combined', label: '', events: tile.events }];
+                const eventAreaSize = eventAreaSizes[tile.key];
+                const groupArea = eventAreaSize
+                  ? {
+                      width: eventAreaSize.width,
+                      height: isSplit
+                        ? Math.max(
+                            0,
+                            (eventAreaSize.height - Math.max(renderGroups.length - 1, 0) * 5) /
+                              Math.max(renderGroups.length, 1)
+                          )
+                        : eventAreaSize.height,
+                    }
+                  : null;
 
                 return renderGroups.map((group) => (
+                  (() => {
+                    const packed = getMonthVisibleEventsBySpace(group.events, groupArea || {}, {
+                      hasLaneLabel: isSplit,
+                      minCardWidth: isSplit ? 96 : 126,
+                      minCardHeight: tile.events.length > 4 ? 26 : 34,
+                      gap: tile.events.length > 4 ? 4 : 5,
+                    });
+
+                    return (
                     <div
                       key={group.id}
                       className={[
@@ -274,7 +359,7 @@ export default function MonthView({
                           {group.label}
                         </div>
                       ) : null}
-                      {group.events.map((event) => (
+                      {packed.visibleEvents.map((event) => (
                         <button
                           key={event.id}
                           type="button"
@@ -324,8 +409,25 @@ export default function MonthView({
                           <span className="calendar-event-card-context">{getEventContextLabel(event)}</span>
                         </button>
                       ))}
+                      {packed.hiddenCount > 0 ? (
+                        <button
+                          type="button"
+                          className="calendar-event-more"
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            slotClickRouterRef.current.handleSingle({
+                              date: tile.date,
+                              anchorPoint: getAnchorFromPointerEvent(clickEvent),
+                            });
+                          }}
+                        >
+                          +{packed.hiddenCount} more
+                        </button>
+                      ) : null}
                     </div>
-                  ));
+                    );
+                  })()
+                ));
               })()}
             </div>
           </article>

@@ -1,0 +1,112 @@
+Calendar App - Implementation Change Notes
+Document ID: 020601
+Date: 2026-06-04
+Format: plain text documentation summary
+
+This document records the current front-page and calendar behavior work around
+provider calendars, event visibility, responsive layouts, and hosted sharing.
+It follows the same project-note style as the existing docs folder.
+
+
+1. Provider calendar behavior
+-----------------------------
+
+The app now treats the sidebar "Using" calendar as the intended target for new
+events.
+
+Expected behavior:
+- Selecting the local calendar keeps new events local.
+- Selecting a Google or Outlook calendar prepares the event for that provider.
+- Guests are optional; an event can be saved to the provider calendar without
+  inviting the account owner as a guest.
+- Existing local events are not silently migrated or uploaded just because the
+  active calendar changes.
+- The last used account/calendar should be remembered so reopening the app
+  keeps the same selected creation target.
+
+The goal is to remove confusion between visibility checkboxes and the calendar
+used for creating new events.
+
+
+2. Multiple calendar visibility
+-------------------------------
+
+The front page is being shaped around an Outlook-like multi-calendar workflow:
+visible calendars should remain readable even when several calendars are shown
+at the same time.
+
+Expected behavior:
+- Local, Google, and Outlook calendars keep their sidebar colors and labels.
+- Split calendar layout separates visible calendars into lanes.
+- Combined layout still exists for users who prefer one merged calendar view.
+- Month, week, and day views should use available space instead of hiding useful
+  event information too early.
+
+
+3. Responsive event packing
+---------------------------
+
+Month view event cards should use both horizontal and vertical space.
+
+Expected behavior:
+- Multiple events on the same day can flow side by side when there is width.
+- Three events on the same day should not disappear when the cell still has
+  empty vertical space.
+- Crowded days should show a visible "+N more" affordance instead of silently
+  clipping events.
+- Week and day views should pack overlapping timed events beside each other
+  inside the relevant calendar lane.
+
+
+4. Front-page UI polish
+-----------------------
+
+The main calendar screen should feel calmer, denser, and more productive.
+
+Focus areas:
+- Header: compact command bar, clear date range, event count, timezone, and
+  important actions.
+- Sidebar: clearer active "Using" calendar state, better long-name truncation,
+  denser groups, and cleaner show/hide controls.
+- Calendar body: stronger event title/time hierarchy and fewer collisions.
+- Quick create: clearer local vs provider save target, better spacing, and
+  optional guests.
+- Responsive behavior: front-page controls should not squeeze awkwardly on
+  laptop or narrow widths.
+
+Settings screens are intentionally outside this polish note.
+
+
+5. Hosted share links concept
+-----------------------------
+
+The planned share-link model uses a hosted SelfHdb backend as a publication
+target for sanitized calendar snapshots.
+
+Default privacy level:
+- busy_only
+
+Busy-only shares should show neutral busy blocks with time only and a generic
+"Busy" title. They must not expose event titles, location, guests, notes, tags,
+provider links, OAuth tokens, or local-only metadata.
+
+Other planned privacy levels:
+- titles_only: keeps title and time, hides sensitive details.
+- full_details: keeps normal display fields while excluding secrets and internal
+  provider metadata.
+
+No public sharing should happen automatically. The owner creates a link and
+publishes a sanitized projection.
+
+
+6. Current verification expectations
+------------------------------------
+
+For implementation work connected to this note, the usual checks are:
+- Run npm test.
+- Run renderer JSX/Babel sanity checks when renderer files change.
+- Manually verify day, week, month, and year views.
+- Check local plus multiple Google/Outlook calendars.
+- Verify quick create/edit, sidebar show/hide, active "Using" calendar,
+  upcoming popover, and keyboard focus.
+

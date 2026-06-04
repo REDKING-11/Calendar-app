@@ -10,6 +10,7 @@ use SelfHdb\Config\AppConfig;
 final class Request
 {
     private ?array $jsonBody = null;
+    private ?array $formBody = null;
 
     public function __construct(
         public readonly string $method,
@@ -64,6 +65,26 @@ final class Request
         return $this->jsonBody = $decoded;
     }
 
+    public function form(): array
+    {
+        if ($this->formBody !== null) {
+            return $this->formBody;
+        }
+
+        if ($this->rawBody === '') {
+            return $this->formBody = [];
+        }
+
+        $contentType = strtolower((string) ($this->headers['content-type'] ?? ''));
+        if (str_contains($contentType, 'application/json')) {
+            return $this->formBody = $this->json();
+        }
+
+        $parsed = [];
+        parse_str($this->rawBody, $parsed);
+        return $this->formBody = is_array($parsed) ? $parsed : [];
+    }
+
     public function bearerToken(): ?string
     {
         $header = $this->headers['authorization'] ?? '';
@@ -72,6 +93,17 @@ final class Request
         }
 
         return trim($matches[1]);
+    }
+
+    public function cookie(string $name): ?string
+    {
+        $value = $_COOKIE[$name] ?? null;
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    public function authToken(): ?string
+    {
+        return $this->bearerToken() ?? $this->cookie('selfhdb_access_token');
     }
 
     public function isSecure(): bool

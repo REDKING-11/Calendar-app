@@ -91,6 +91,7 @@ export default function CalendarViewport({
           selectedDate={selectedDate}
           onSelectDate={onSelectDate}
           onCreateEvent={onCreateEvent}
+          onSelectEvent={onSelectEvent}
           onSelectMonth={onSelectMonth}
           calendarView={calendarView}
           onChangeView={onChangeView}

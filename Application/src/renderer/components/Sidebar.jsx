@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { buildMonthTiles, getWeekdayLabels, isSameDay } from './calendar-helpers';
 
 export default function Sidebar({
@@ -24,6 +25,8 @@ export default function Sidebar({
   onManageTag,
   onToggleCalendar,
   onUseCalendar,
+  onDeleteCalendar,
+  calendarDeleteBusyId = '',
   onClearFilters,
 }) {
   const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
@@ -31,6 +34,7 @@ export default function Sidebar({
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
   const [isYearPickerOpen, setIsYearPickerOpen] = useState(false);
   const [tagActionMenu, setTagActionMenu] = useState(null);
+  const [calendarActionMenu, setCalendarActionMenu] = useState(null);
   const monthPickerRef = useRef(null);
   const yearPickerRef = useRef(null);
   const tiles = useMemo(
@@ -79,6 +83,7 @@ export default function Sidebar({
     { id: 'week', label: 'This week' },
     { id: 'month', label: 'This month' },
   ];
+  const contextMenuRoot = typeof document === 'undefined' ? null : document.body;
 
   useEffect(() => {
     if (selectedDate) {
@@ -117,17 +122,23 @@ export default function Sidebar({
   }, [isMonthPickerOpen, isYearPickerOpen]);
 
   useEffect(() => {
-    if (!tagActionMenu) {
+    if (!tagActionMenu && !calendarActionMenu) {
       return undefined;
     }
 
-    const handlePointerDown = () => {
+    const handlePointerDown = (event) => {
+      if (event.target?.closest?.('.sidebar-context-menu')) {
+        return;
+      }
+
       setTagActionMenu(null);
+      setCalendarActionMenu(null);
     };
 
     const handleEscape = (event) => {
       if (event.key === 'Escape') {
         setTagActionMenu(null);
+        setCalendarActionMenu(null);
       }
     };
 
@@ -138,7 +149,7 @@ export default function Sidebar({
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [tagActionMenu]);
+  }, [calendarActionMenu, tagActionMenu]);
 
   const hasActiveFilters = searchQuery.trim() || activeTagFilters.length > 0;
   const hasConnectedAccounts = connectedAccounts.length > 0;
@@ -177,8 +188,21 @@ export default function Sidebar({
   const openTagActionMenu = (event, tag) => {
     event.preventDefault();
     event.stopPropagation();
+    setCalendarActionMenu(null);
     setTagActionMenu({
       tag,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
+
+  const openCalendarActionMenu = (event, calendar, group) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTagActionMenu(null);
+    setCalendarActionMenu({
+      calendar,
+      group,
       x: event.clientX,
       y: event.clientY,
     });
@@ -198,6 +222,12 @@ export default function Sidebar({
     }
 
     openTagActionMenu(event, tag);
+  };
+
+  const runContextMenuAction = async (event, action) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await action?.();
   };
 
   return (
@@ -449,6 +479,7 @@ export default function Sidebar({
                           .filter(Boolean)
                           .join(' ')}
                         title={`${calendar.active ? 'Using' : 'Use'} ${calendar.label}`}
+                        onContextMenu={(event) => openCalendarActionMenu(event, calendar, group)}
                       >
                         <button
                           type="button"
@@ -461,6 +492,14 @@ export default function Sidebar({
                           />
                           <span className="sidebar-calendar-label-wrap">
                             <span className="sidebar-calendar-label">{calendar.label}</span>
+                            <span className="sidebar-calendar-subtitle">
+                              {group.provider === 'microsoft'
+                                ? 'Outlook'
+                                : group.provider === 'google'
+                                  ? 'Google'
+                                  : 'Local'}
+                              {group.title ? ` - ${group.title}` : ''}
+                            </span>
                             {calendar.active ? (
                               <span className="sidebar-calendar-active-badge">Using</span>
                             ) : null}
@@ -669,9 +708,65 @@ export default function Sidebar({
 
         <div className="mt-auto pt-6 text-xs app-text-soft">Terms - Privacy</div>
       </div>
-      {tagActionMenu ? (
+      {calendarActionMenu && contextMenuRoot ? createPortal(
         <div
-          className="sidebar-context-menu fixed z-50 min-w-[180px] rounded-2xl p-2"
+          className="sidebar-context-menu fixed min-w-[210px] rounded-2xl p-2"
+          style={{
+            left: Math.min(calendarActionMenu.x, window.innerWidth - 226),
+            top: Math.min(calendarActionMenu.y, window.innerHeight - 178),
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className="px-3 pb-1 pt-1 text-xs font-semibold uppercase tracking-[0.14em] app-text-soft">
+            Calendar
+          </p>
+          <p className="sidebar-context-title px-3 pb-2">
+            {calendarActionMenu.calendar.label}
+          </p>
+          <button
+            type="button"
+            className="sidebar-context-button flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
+            onMouseDown={(event) => runContextMenuAction(event, () => {
+              onUseCalendar?.(calendarActionMenu.calendar);
+              setCalendarActionMenu(null);
+            })}
+          >
+            Use for new events
+          </button>
+          <button
+            type="button"
+            className="sidebar-context-button flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
+            onMouseDown={(event) => runContextMenuAction(event, () => {
+              onToggleCalendar?.(calendarActionMenu.calendar);
+              setCalendarActionMenu(null);
+            })}
+          >
+            {calendarActionMenu.calendar.visible ? 'Hide from view' : 'Show in view'}
+          </button>
+          {calendarActionMenu.calendar.provider !== 'local' ? (
+            <button
+              type="button"
+              className="sidebar-context-button sidebar-context-button--danger flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
+              disabled={calendarDeleteBusyId === calendarActionMenu.calendar.sourceId}
+              onMouseDown={(event) => runContextMenuAction(event, async () => {
+                const calendar = calendarActionMenu.calendar;
+                await onDeleteCalendar?.(calendar);
+                setCalendarActionMenu((current) =>
+                  current?.calendar?.sourceId === calendar.sourceId ? null : current
+                );
+              })}
+            >
+              {calendarDeleteBusyId === calendarActionMenu.calendar.sourceId
+                ? 'Deleting...'
+                : 'Delete imported calendar'}
+            </button>
+          ) : null}
+        </div>,
+        contextMenuRoot
+      ) : null}
+      {tagActionMenu && contextMenuRoot ? createPortal(
+        <div
+          className="sidebar-context-menu fixed min-w-[180px] rounded-2xl p-2"
           style={{
             left: Math.min(tagActionMenu.x, window.innerWidth - 196),
             top: Math.min(tagActionMenu.y, window.innerHeight - 120),
@@ -684,20 +779,20 @@ export default function Sidebar({
           <button
             type="button"
             className="sidebar-context-button flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
-            onClick={() => {
+            onMouseDown={(event) => runContextMenuAction(event, () => {
               onManageTag?.(tagActionMenu.tag, 'rename');
               setTagActionMenu(null);
-            }}
+            })}
           >
             Rename
           </button>
           <button
             type="button"
             className="sidebar-context-button sidebar-context-button--danger flex w-full rounded-xl px-3 py-2 text-left text-sm transition"
-            onClick={() => {
+            onMouseDown={(event) => runContextMenuAction(event, () => {
               onManageTag?.(tagActionMenu.tag, 'delete');
               setTagActionMenu(null);
-            }}
+            })}
           >
             Delete Fully
           </button>
@@ -712,7 +807,8 @@ export default function Sidebar({
               Deleting this tag removes it from every event across the app.
             </p>
           </div>
-        </div>
+        </div>,
+        contextMenuRoot
       ) : null}
     </aside>
   );

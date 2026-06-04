@@ -81,22 +81,47 @@ const SHARE_PRIVACY_OPTIONS = [
   { id: 'full_details', label: 'Full details' },
 ];
 
+const SHARE_ACCESS_OPTIONS = [
+  { id: 'link', label: 'Link' },
+  { id: 'link_org', label: 'Link + org' },
+  { id: 'org', label: 'Org only' },
+];
+
+const SHARE_PRIVATE_MODE_OPTIONS = [
+  { id: 'busy', label: 'Show busy' },
+  { id: 'hide', label: 'Hide' },
+  { id: 'details', label: 'Use privacy' },
+];
+
+function parseRecipientEmails(value = '') {
+  return String(value || '')
+    .split(/[\n,;]+/g)
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean)
+    .map((email) => ({ email }));
+}
+
 function HostedSharePanel({
   hosted,
   externalCalendarSources = [],
   onListShares,
   onCreateShare,
   onRevokeShare,
+  onRotateShareToken,
+  onUpdateShareRecipients,
   onPublishShare,
 }) {
   const [shares, setShares] = useState([]);
   const [draft, setDraft] = useState({
     name: 'Shared availability',
     privacyLevel: 'busy_only',
+    accessMode: 'link',
+    privateMode: 'busy',
     calendarIds: [],
     dateFrom: '',
     dateTo: '',
     expiresAt: '',
+    recipientEmails: '',
   });
   const [busyAction, setBusyAction] = useState('');
   const [message, setMessage] = useState('');
@@ -145,12 +170,19 @@ function HostedSharePanel({
   const buildShareInput = () => ({
     name: draft.name,
     privacyLevel: draft.privacyLevel,
+    accessMode: draft.accessMode,
     expiresAt: draft.expiresAt || null,
     scope: {
       calendarIds: draft.calendarIds,
       dateFrom: draft.dateFrom || null,
       dateTo: draft.dateTo || null,
-      includePrivate: false,
+      privateMode: draft.privateMode,
+      includePrivate: draft.privateMode === 'details',
+      calendarCatalog: calendars.map((calendar) => ({
+        id: calendar.id,
+        label: calendar.label,
+        provider: calendar.provider,
+      })),
     },
   });
 
@@ -159,8 +191,12 @@ function HostedSharePanel({
     setMessage('');
     try {
       const share = await onCreateShare?.(buildShareInput());
+      const recipients = parseRecipientEmails(draft.recipientEmails);
+      if (share?.id && recipients.length > 0) {
+        await onUpdateShareRecipients?.({ shareId: share.id, recipients });
+      }
       setShares((current) => [share, ...current]);
-      setMessage(share?.url ? `Share link created: ${share.url}` : 'Share link created.');
+      setMessage(share?.url ? `Share link created: ${share.url}` : 'Share created.');
     } catch (error) {
       setMessage(error?.message || 'Share link could not be created.');
     } finally {
@@ -175,6 +211,7 @@ function HostedSharePanel({
       const updated = await onPublishShare?.({
         shareId: share.id,
         privacyLevel: share.privacyLevel,
+        accessMode: share.accessMode,
         scope: share.scope || {},
       });
       setShares((current) =>
@@ -186,6 +223,30 @@ function HostedSharePanel({
     } finally {
       setBusyAction('');
     }
+  };
+
+  const handleRotate = async (share) => {
+    setBusyAction(`rotate:${share.id}`);
+    setMessage('');
+    try {
+      const updated = await onRotateShareToken?.(share.id);
+      setShares((current) =>
+        current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+      );
+      setMessage(updated?.url ? `New share link: ${updated.url}` : 'Share token rotated.');
+    } catch (error) {
+      setMessage(error?.message || 'Share token could not be rotated.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleCopy = async (url) => {
+    if (!url || !navigator?.clipboard) {
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    setMessage('Share link copied.');
   };
 
   const handleRevoke = async (share) => {
@@ -245,6 +306,38 @@ function HostedSharePanel({
             </select>
           </label>
           <label className="settings-field">
+            <span>Access</span>
+            <select
+              className="app-input"
+              value={draft.accessMode}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, accessMode: event.target.value }))
+              }
+            >
+              {SHARE_ACCESS_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Private events</span>
+            <select
+              className="app-input"
+              value={draft.privateMode}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, privateMode: event.target.value }))
+              }
+            >
+              {SHARE_PRIVATE_MODE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="settings-field">
             <span>From</span>
             <input
               className="app-input"
@@ -271,6 +364,16 @@ function HostedSharePanel({
               onChange={(event) => setDraft((current) => ({ ...current, expiresAt: event.target.value }))}
             />
           </label>
+          <label className="settings-field settings-field--wide">
+            <span>Recipient emails</span>
+            <textarea
+              className="app-input"
+              value={draft.recipientEmails}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, recipientEmails: event.target.value }))
+              }
+            />
+          </label>
         </div>
         <div className="share-calendar-picker">
           {calendars.map((calendar) => (
@@ -285,7 +388,7 @@ function HostedSharePanel({
           ))}
         </div>
         <p className="settings-field-copy">
-          Leave all calendars unchecked to include every visible share-eligible calendar. Private/local-only events stay hidden.
+          Leave all calendars unchecked to include every calendar selected for sharing.
         </p>
         <button
           type="button"
@@ -304,10 +407,19 @@ function HostedSharePanel({
               <div className="min-w-0">
                 <p className="m-0 font-bold text-[var(--text-primary)]">{share.name}</p>
                 <p className="notification-helper-copy m-0">
-                  {share.privacyLevel} {share.revokedAt ? '- revoked' : ''}
+                  {share.accessMode || 'link'} / {share.privacyLevel} {share.revokedAt ? '- revoked' : ''}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                {share.url ? (
+                  <button
+                    type="button"
+                    className="app-button app-button--secondary"
+                    onClick={() => handleCopy(share.url)}
+                  >
+                    Copy
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="app-button app-button--secondary"
@@ -315,6 +427,14 @@ function HostedSharePanel({
                   onClick={() => handlePublish(share)}
                 >
                   {busyAction === `publish:${share.id}` ? 'Publishing...' : 'Publish now'}
+                </button>
+                <button
+                  type="button"
+                  className="app-button app-button--secondary"
+                  disabled={Boolean(share.revokedAt) || busyAction === `rotate:${share.id}`}
+                  onClick={() => handleRotate(share)}
+                >
+                  {busyAction === `rotate:${share.id}` ? 'Rotating...' : 'Rotate link'}
                 </button>
                 <button
                   type="button"
@@ -417,6 +537,8 @@ export default function SettingsWindow({
   onHostedUrlChange,
   hostedPassword,
   onHostedPasswordChange,
+  hostedInviteKey,
+  onHostedInviteKeyChange,
   onHostedTestConnection,
   onHostedRegister,
   onHostedSignIn,
@@ -426,6 +548,8 @@ export default function SettingsWindow({
   onListHostedShares,
   onCreateHostedShare,
   onRevokeHostedShare,
+  onRotateHostedShareToken,
+  onUpdateHostedShareRecipients,
   onPublishHostedShare,
   hostedBusyAction,
   hostedStatusMessage,
@@ -877,6 +1001,35 @@ export default function SettingsWindow({
               When the sidebar Using calendar is Google or Outlook, new events are created on that
               provider calendar. Local calendar still saves locally.
             </p>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={preferences.providerLiveUpdatesBeta === true}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  if (enabled) {
+                    const confirmed = window.confirm(
+                      'Enable beta live provider updates? Calendar App will periodically refresh imported Google/Outlook calendars and provider-backed edits/deletes can affect the provider calendar. Keep this off if you are not ready to test live sync behavior.'
+                    );
+                    if (!confirmed) {
+                      event.target.checked = false;
+                      return;
+                    }
+                  }
+
+                  updatePreference(setPreferences, {
+                    providerLiveUpdatesBeta: enabled,
+                  });
+                }}
+              />
+              <span>Enable beta live updates for imported Google/Outlook calendars</span>
+            </label>
+            <p className="settings-field-copy m-0">
+              When enabled, Calendar App refreshes already-imported provider calendars in the
+              background so remote changes and removals appear here. Provider-backed events can
+              also update/delete on the provider. This is beta and should stay off unless you are
+              intentionally testing live sync.
+            </p>
           </div>
         </SettingsCard>
 
@@ -888,6 +1041,8 @@ export default function SettingsWindow({
           onHostedEmailChange={(value) => updatePreference(setPreferences, { hostedEmail: value })}
           hostedPassword={hostedPassword}
           onHostedPasswordChange={onHostedPasswordChange}
+          hostedInviteKey={hostedInviteKey}
+          onHostedInviteKeyChange={onHostedInviteKeyChange}
           hostedDeviceName={preferences.hostedDeviceName}
           onHostedDeviceNameChange={(value) =>
             updatePreference(setPreferences, { hostedDeviceName: value })
@@ -913,6 +1068,8 @@ export default function SettingsWindow({
             onListShares={onListHostedShares}
             onCreateShare={onCreateHostedShare}
             onRevokeShare={onRevokeHostedShare}
+            onRotateShareToken={onRotateHostedShareToken}
+            onUpdateShareRecipients={onUpdateHostedShareRecipients}
             onPublishShare={onPublishHostedShare}
           />
         </SettingsCard>

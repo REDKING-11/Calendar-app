@@ -54,6 +54,10 @@ import {
 } from './composerRouting';
 import { shouldFallbackActiveCalendarContext } from './calendarContextPersistence';
 import {
+  getExternalCalendarDeleteResultMessage,
+  isExternalCalendarSourcePresent,
+} from './externalCalendarDeletion';
+import {
   focusFirstAvailable,
   getRegionShortcutTarget,
   isEditableTarget,
@@ -80,6 +84,7 @@ const EMPTY_COMPOSER_STATE = {
 };
 const LOCAL_CALENDAR_VISIBILITY_KEY = 'calendar-local-calendar-visible';
 const ACTIVE_CALENDAR_CONTEXT_KEY = 'calendar-active-calendar-context';
+const PROVIDER_LIVE_REFRESH_INTERVAL_MS = 90 * 1000;
 
 function getWindowMode() {
   const params = new URLSearchParams(window.location.search);
@@ -568,6 +573,7 @@ function App() {
   });
   const [hostedUrl, setHostedUrl] = useState('');
   const [hostedPassword, setHostedPassword] = useState('');
+  const [hostedInviteKey, setHostedInviteKey] = useState('');
   const [hostedBusyAction, setHostedBusyAction] = useState('');
   const [hostedStatusMessage, setHostedStatusMessage] = useState('');
   const [oauthBusyProvider, setOAuthBusyProvider] = useState('');
@@ -575,6 +581,7 @@ function App() {
   const [accountBusyId, setAccountBusyId] = useState('');
   const [externalCalendarsByAccount, setExternalCalendarsByAccount] = useState({});
   const [externalCalendarBusyId, setExternalCalendarBusyId] = useState('');
+  const [calendarDeleteBusyId, setCalendarDeleteBusyId] = useState('');
   const [composerStatusMessage, setComposerStatusMessage] = useState('');
   const [pendingInviteConfirmation, setPendingInviteConfirmation] = useState(null);
   const snapshotRef = useRef(null);
@@ -586,6 +593,7 @@ function App() {
   const calendarViewRegionRef = useRef(null);
   const oauthPollingRef = useRef(null);
   const oauthPollingDeadlineRef = useRef(0);
+  const providerLiveRefreshInFlightRef = useRef(false);
   const debugStatusTimerRef = useRef(null);
 
   const rememberAppError = (error, source = 'app') => {
@@ -709,6 +717,20 @@ function App() {
       ),
     [externalCalendarSources]
   );
+  const providerLiveSourceSignature = useMemo(
+    () =>
+      externalCalendarSources
+        .filter(
+          (source) =>
+            source?.sourceId &&
+            source.selected !== false &&
+            (source.provider === 'google' || source.provider === 'microsoft')
+        )
+        .map((source) => source.sourceId)
+        .sort()
+        .join('|'),
+    [externalCalendarSources]
+  );
   const sidebarCalendarGroups = useMemo(
     () =>
       buildSidebarCalendarGroups({
@@ -735,6 +757,86 @@ function App() {
       window.localStorage.setItem(ACTIVE_CALENDAR_CONTEXT_KEY, 'local');
     }
   }, [activeCalendarContextId, externalCalendarSources, snapshot]);
+
+  useEffect(() => {
+    if (windowMode !== 'main' || preferences.providerLiveUpdatesBeta !== true) {
+      return undefined;
+    }
+
+    if (!providerLiveSourceSignature || !window.calendarApp?.refreshExternalSource) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const refreshLiveSources = async ({ announceIdle = false } = {}) => {
+      if (providerLiveRefreshInFlightRef.current) {
+        return;
+      }
+
+      providerLiveRefreshInFlightRef.current = true;
+      let createdCount = 0;
+      let updatedCount = 0;
+      let removedCount = 0;
+
+      try {
+        const refreshableSources = (snapshotRef.current?.externalCalendarSources || []).filter(
+          (source) =>
+            source?.sourceId &&
+            source.selected !== false &&
+            (source.provider === 'google' || source.provider === 'microsoft')
+        );
+
+        for (const source of refreshableSources) {
+          if (cancelled) {
+            return;
+          }
+
+          const result = await window.calendarApp.refreshExternalSource({
+            sourceId: source.sourceId,
+          });
+          if (result?.snapshot) {
+            snapshotRef.current = result.snapshot;
+            setSnapshot(result.snapshot);
+          }
+          createdCount += Number(result?.createdCount || 0);
+          updatedCount += Number(result?.updatedCount || 0);
+          removedCount += Number(result?.removedCount || 0);
+        }
+
+        const changedCount = createdCount + updatedCount + removedCount;
+        if (changedCount > 0) {
+          setOAuthStatusMessage(
+            `Live provider update applied ${changedCount} change${
+              changedCount === 1 ? '' : 's'
+            } (${createdCount} new, ${updatedCount} updated, ${removedCount} removed).`
+          );
+        } else if (announceIdle) {
+          setOAuthStatusMessage('Live provider updates are on. No provider changes found.');
+        }
+      } catch (error) {
+        rememberAppError(error, 'provider-live-refresh');
+        setOAuthStatusMessage(error?.message || 'Live provider update failed.');
+      } finally {
+        providerLiveRefreshInFlightRef.current = false;
+      }
+    };
+
+    refreshLiveSources({ announceIdle: true });
+    const intervalId = window.setInterval(
+      () => refreshLiveSources(),
+      PROVIDER_LIVE_REFRESH_INTERVAL_MS
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    preferences.providerLiveUpdatesBeta,
+    providerLiveSourceSignature,
+    windowMode,
+  ]);
 
   const clearHolidayPreload = () => {
     holidayPreloadRequestRef.current += 1;
@@ -1494,6 +1596,69 @@ function App() {
     }
   };
 
+  const handleDeleteExternalCalendarSource = async (calendar) => {
+    if (calendar?.provider === 'local') {
+      return;
+    }
+
+    if (!calendar?.sourceId) {
+      showDebugStatus('This imported calendar is missing its source id, so it cannot be deleted yet.');
+      return;
+    }
+
+    if (typeof window.calendarApp?.deleteExternalCalendarSource !== 'function') {
+      const message = 'Restart Calendar App to finish loading the imported-calendar delete feature.';
+      showDebugStatus(message);
+      window.alert?.(`${message} The delete bridge is not loaded in this running window yet.`);
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      `Delete imported calendar "${calendar.label}" and remove its ${calendar.eventCount || 0} imported event${
+        calendar.eventCount === 1 ? '' : 's'
+      } from Calendar App?\n\nThis does not delete the calendar itself from Google/Outlook.`
+    );
+    if (!shouldDelete) {
+      return;
+    }
+
+    setCalendarDeleteBusyId(calendar.sourceId);
+    try {
+      const result = await window.calendarApp.deleteExternalCalendarSource({
+        sourceId: calendar.sourceId,
+        deleteEvents: true,
+      });
+      const refreshedSnapshot = await refreshSnapshot();
+
+      if (activeCalendarContextId === calendar.sourceId) {
+        setActiveCalendarContextId('local');
+        window.localStorage.setItem(ACTIVE_CALENDAR_CONTEXT_KEY, 'local');
+      }
+
+      if (isExternalCalendarSourcePresent(refreshedSnapshot, calendar.sourceId)) {
+        const message = `Tried to delete "${calendar.label}", but it is still present after refresh. Restart Calendar App and try again.`;
+        setOAuthStatusMessage(message);
+        showDebugStatus(message);
+        return;
+      }
+
+      const message = getExternalCalendarDeleteResultMessage({
+        label: calendar.label,
+        deletedEventCount: result?.deletedEventCount || 0,
+      });
+      setOAuthStatusMessage(message);
+      showDebugStatus(message);
+    } catch (error) {
+      rememberAppError(error, 'external-calendar-delete');
+      const message = error?.message || 'Imported calendar could not be deleted.';
+      setOAuthStatusMessage(message);
+      showDebugStatus(message);
+      window.alert?.(message);
+    } finally {
+      setCalendarDeleteBusyId('');
+    }
+  };
+
   const handleUseSidebarCalendar = (calendar) => {
     const nextContextId = calendar?.provider === 'local' ? 'local' : calendar?.sourceId;
     if (!nextContextId) {
@@ -1626,6 +1791,9 @@ function App() {
     const hasOutboundLink = (eventToDelete.externalProviderLinks || []).some(
       (link) => String(link?.mode || '').toLowerCase() === 'outbound'
     );
+    const hasImportedProviderLink = (eventToDelete.externalProviderLinks || []).some(
+      (link) => String(link?.mode || '').toLowerCase() === 'imported'
+    );
     if (hasOutboundLink) {
       const shouldDelete = window.confirm(
         'Delete this event and cancel/remove its provider invite too?'
@@ -1635,8 +1803,21 @@ function App() {
       }
     }
 
+    const shouldDeleteImportedProvider =
+      preferences.providerLiveUpdatesBeta === true && hasImportedProviderLink;
+    if (shouldDeleteImportedProvider) {
+      const shouldDeleteRemote = window.confirm(
+        'Beta live updates are on. Delete this imported event from Google/Outlook too? This removes it from the provider calendar, not only Calendar App.'
+      );
+      if (!shouldDeleteRemote) {
+        return;
+      }
+    }
+
     try {
-      const nextSnapshot = await window.calendarApp.deleteEvent(eventToDelete.id);
+      const nextSnapshot = await window.calendarApp.deleteEvent(eventToDelete.id, {
+        deleteImportedProvider: shouldDeleteImportedProvider,
+      });
       snapshotRef.current = nextSnapshot;
       setSnapshot(nextSnapshot);
       closeComposer();
@@ -1693,6 +1874,8 @@ function App() {
     baseUrl: hostedUrl,
     email: preferences.hostedEmail,
     password: hostedPassword,
+    displayName: preferences.name,
+    inviteKey: hostedInviteKey,
     deviceName: preferences.hostedDeviceName,
   });
 
@@ -2030,6 +2213,8 @@ function App() {
           onHostedUrlChange={setHostedUrl}
           hostedPassword={hostedPassword}
           onHostedPasswordChange={setHostedPassword}
+          hostedInviteKey={hostedInviteKey}
+          onHostedInviteKeyChange={setHostedInviteKey}
           onHostedTestConnection={() =>
             handleHostedAction(
               'test-connection',
@@ -2045,6 +2230,7 @@ function App() {
             ).then((result) => {
               if (result) {
                 setHostedPassword('');
+                setHostedInviteKey('');
               }
             })
           }
@@ -2099,6 +2285,12 @@ function App() {
           }
           onRevokeHostedShare={(shareId) =>
             runHostedShareAction(() => window.calendarApp.revokeHostedShare(shareId))
+          }
+          onRotateHostedShareToken={(shareId) =>
+            runHostedShareAction(() => window.calendarApp.rotateHostedShareToken(shareId))
+          }
+          onUpdateHostedShareRecipients={(input) =>
+            runHostedShareAction(() => window.calendarApp.updateHostedShareRecipients(input))
           }
           onPublishHostedShare={(input) =>
             runHostedShareAction(() => window.calendarApp.publishHostedShare(input))
@@ -2161,6 +2353,8 @@ function App() {
           onManageTag={handleManageTag}
           onToggleCalendar={handleToggleSidebarCalendar}
           onUseCalendar={handleUseSidebarCalendar}
+          onDeleteCalendar={handleDeleteExternalCalendarSource}
+          calendarDeleteBusyId={calendarDeleteBusyId}
           onClearFilters={() => {
             setSearchQuery('');
             setQuickFilter('all');

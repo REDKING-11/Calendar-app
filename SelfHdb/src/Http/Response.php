@@ -35,4 +35,19 @@ final class Response
 
         self::json($statusCode, $payload);
     }
+
+    public static function html(string $html, int $statusCode = 200): never
+    {
+        http_response_code($statusCode);
+        header('Content-Type: text/html; charset=utf-8');
+        echo $html;
+        exit;
+    }
+
+    public static function redirect(string $location, int $statusCode = 302): never
+    {
+        http_response_code($statusCode);
+        header('Location: ' . $location);
+        exit;
+    }
 }

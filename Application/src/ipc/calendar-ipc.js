@@ -60,6 +60,7 @@ function registerCalendarHandlers(store) {
     'calendar:importExternalCalendar',
     'calendar:refreshExternalSource',
     'calendar:setExternalCalendarSourceSelected',
+    'calendar:deleteExternalCalendarSource',
     'calendar:importData',
     'calendar:importDataFromFilePicker',
     'calendar:exportData',
@@ -94,6 +95,8 @@ function registerCalendarHandlers(store) {
     'hosted:createShare',
     'hosted:updateShare',
     'hosted:revokeShare',
+    'hosted:rotateShareToken',
+    'hosted:updateShareRecipients',
     'hosted:publishShare',
     'security:beginReauth',
     'security:completeReauth',
@@ -106,7 +109,7 @@ function registerCalendarHandlers(store) {
   handle('calendar:getSnapshot', () => store.snapshot());
   handle('calendar:createEvent', (_event, input) => store.createEvent(input));
   handle('calendar:updateEvent', (_event, input) => store.updateEvent(input));
-  handle('calendar:deleteEvent', (_event, eventId) => store.deleteEvent(eventId));
+  handle('calendar:deleteEvent', (_event, eventId, options) => store.deleteEvent(eventId, options || {}));
   handle('calendar:listExternalCalendars', (_event, input) =>
     store.listExternalCalendars(input || {})
   );
@@ -118,6 +121,9 @@ function registerCalendarHandlers(store) {
   );
   handle('calendar:setExternalCalendarSourceSelected', (_event, input) =>
     store.setExternalCalendarSourceSelected(input || {})
+  );
+  handle('calendar:deleteExternalCalendarSource', (_event, input) =>
+    store.deleteExternalCalendarSource(input || {})
   );
   handle('calendar:importData', (_event, input) => store.importData(input || {}));
   handle('calendar:importDataFromFilePicker', () => store.importDataFromFilePicker());
@@ -173,6 +179,10 @@ function registerCalendarHandlers(store) {
   handle('hosted:createShare', (_event, input) => store.createHostedShare(input || {}));
   handle('hosted:updateShare', (_event, input) => store.updateHostedShare(input || {}));
   handle('hosted:revokeShare', (_event, shareId) => store.revokeHostedShare(shareId));
+  handle('hosted:rotateShareToken', (_event, shareId) => store.rotateHostedShareToken(shareId));
+  handle('hosted:updateShareRecipients', (_event, input) =>
+    store.updateHostedShareRecipients(input || {})
+  );
   handle('hosted:publishShare', (_event, input) => store.publishHostedShare(input || {}));
   handle('security:beginReauth', (_event, action) => store.beginReauth(action));
   handle('security:completeReauth', (_event, challengeId, response) =>

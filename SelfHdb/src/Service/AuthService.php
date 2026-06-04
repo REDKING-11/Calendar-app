@@ -19,7 +19,15 @@ final class AuthService
     ) {
     }
 
-    public function register(string $email, string $password, array $device, string $ipAddress, string $userAgent): array
+    public function register(
+        string $email,
+        string $password,
+        array $device,
+        string $ipAddress,
+        string $userAgent,
+        string $displayName = '',
+        string $inviteKey = '',
+    ): array
     {
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             throw new RuntimeException('A valid email address is required.');
@@ -33,8 +41,25 @@ final class AuthService
             throw new RuntimeException('An account with that email already exists.');
         }
 
-        return $this->repository->transaction(function () use ($email, $password, $device, $ipAddress, $userAgent) {
-            $user = $this->repository->createUser($email, password_hash($password, PASSWORD_DEFAULT));
+        $invite = null;
+        if ($this->repository->isInstalled()) {
+            $inviteKey = trim($inviteKey);
+            if ($inviteKey === '') {
+                throw new RuntimeException('An invite key is required for this SelfHdb server.');
+            }
+
+            $invite = $this->repository->findActiveInviteKeyByCode($inviteKey);
+            if (!$invite) {
+                throw new RuntimeException('Invite key is invalid, expired, or fully used.');
+            }
+        }
+
+        return $this->repository->transaction(function () use ($email, $password, $device, $ipAddress, $userAgent, $displayName, $inviteKey, $invite) {
+            $role = $invite ? (string) ($invite['role'] ?? 'member') : 'admin';
+            $user = $this->repository->createUser($email, password_hash($password, PASSWORD_DEFAULT), $displayName, $role);
+            if ($invite) {
+                $this->repository->consumeInviteKey($inviteKey, $user['id'], $ipAddress);
+            }
             $normalizedDevice = $this->repository->upsertDevice($user['id'], $device);
             $calendar = $this->repository->ensureDefaultCalendar($user['id'], 'UTC');
             $auth = $this->issueAuthBundle($user, $normalizedDevice, $ipAddress, $userAgent);
@@ -92,7 +117,7 @@ final class AuthService
 
         $user = $this->repository->findUserById($tokenRecord['user_id']);
         $device = $this->repository->findDeviceForUser($tokenRecord['user_id'], $tokenRecord['device_id']);
-        if (!$user || !$device || $device['revoked_at'] !== null) {
+        if (!$user || (int) $user['is_active'] !== 1 || !$device || $device['revoked_at'] !== null) {
             throw new RuntimeException('Device is no longer trusted.');
         }
 
@@ -148,7 +173,7 @@ final class AuthService
 
         $user = $this->repository->findUserById((string) ($claims['sub'] ?? ''));
         $device = $this->repository->findDeviceForUser((string) ($claims['sub'] ?? ''), (string) ($claims['did'] ?? ''));
-        if (!$user || !$device || $device['revoked_at'] !== null) {
+        if (!$user || (int) $user['is_active'] !== 1 || !$device || $device['revoked_at'] !== null) {
             return null;
         }
 
@@ -213,6 +238,8 @@ final class AuthService
         return [
             'id' => $user['id'],
             'email' => $user['email'],
+            'displayName' => $user['display_name'] ?? null,
+            'role' => $user['role'] ?? 'member',
             'isActive' => (bool) $user['is_active'],
             'createdAt' => $user['created_at'],
             'updatedAt' => $user['updated_at'],

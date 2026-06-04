@@ -166,6 +166,26 @@ class HostedSyncService {
       ...patch,
       updatedAt: nowIso(),
     };
+    const params = {
+      stateId: nextState.stateId,
+      baseUrl: nextState.baseUrl,
+      provider: nextState.provider,
+      connectionStatus: nextState.connectionStatus,
+      backendClaimed: nextState.backendClaimed,
+      enabledProvidersJson: nextState.enabledProvidersJson,
+      accountEmail: nextState.accountEmail,
+      displayName: nextState.displayName,
+      sessionId: nextState.sessionId,
+      accessTokenCipherText: nextState.accessTokenCipherText,
+      refreshTokenCipherText: nextState.refreshTokenCipherText,
+      accessTokenExpiresAt: nextState.accessTokenExpiresAt,
+      refreshTokenExpiresAt: nextState.refreshTokenExpiresAt,
+      serverCursor: nextState.serverCursor,
+      lastPushedSequence: nextState.lastPushedSequence,
+      lastSyncedAt: nextState.lastSyncedAt,
+      lastError: nextState.lastError,
+      updatedAt: nextState.updatedAt,
+    };
 
     this.db
       .prepare(
@@ -193,7 +213,7 @@ class HostedSyncService {
            updated_at = :updatedAt
          WHERE state_id = :stateId`
       )
-      .run(nextState);
+      .run(params);
 
     return this.getState();
   }
@@ -384,7 +404,7 @@ class HostedSyncService {
     });
   }
 
-  async register({ baseUrl, email, password, deviceName }) {
+  async register({ baseUrl, email, password, deviceName, displayName, inviteKey }) {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
     await this.testConnection(normalizedBaseUrl);
     const result = await this.requestJson({
@@ -394,6 +414,8 @@ class HostedSyncService {
       body: {
         email,
         password,
+        displayName,
+        inviteKey,
         device: this.buildDevicePayload(deviceName),
       },
     });
@@ -704,6 +726,24 @@ class HostedSyncService {
       method: 'POST',
       path: `/v1/shares/${encodeURIComponent(shareId)}/revoke`,
       body: {},
+    });
+  }
+
+  async rotateShareToken(shareId) {
+    return this.authorizedRequest({
+      method: 'POST',
+      path: `/v1/shares/${encodeURIComponent(shareId)}/rotate-token`,
+      body: {},
+    });
+  }
+
+  async updateShareRecipients(shareId, recipients = []) {
+    return this.authorizedRequest({
+      method: 'POST',
+      path: `/v1/shares/${encodeURIComponent(shareId)}/recipients`,
+      body: {
+        recipients,
+      },
     });
   }
 

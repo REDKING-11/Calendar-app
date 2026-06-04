@@ -2525,6 +2525,76 @@ class CalendarStore {
     return this.snapshot();
   }
 
+  deleteExternalCalendarSource({ sourceId, deleteEvents = true } = {}) {
+    const source = this.getExternalCalendarSourceById(sourceId);
+    if (!source) {
+      throw new Error('External calendar source was not found.');
+    }
+
+    const activeImportedLinks = this.listExternalEventLinks({
+      sourceId,
+      syncStatus: 'active',
+      linkMode: 'imported',
+    });
+    const eventIdsToDelete = [...new Set(activeImportedLinks.map((link) => link.eventId))];
+    const timestamp = nowIso();
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      if (deleteEvents) {
+        for (const eventId of eventIdsToDelete) {
+          this.db
+            .prepare(
+              `UPDATE event_metadata
+               SET deleted = 1,
+                   updated_at = :updatedAt,
+                   updated_by = :updatedBy
+               WHERE id = :eventId`
+            )
+            .run({
+              eventId,
+              updatedAt: timestamp,
+              updatedBy: this.deviceId,
+            });
+
+          this.recordChange({
+            entity: 'event',
+            entityId: eventId,
+            operation: 'delete',
+            patch: { deleted: true },
+            deviceId: this.deviceId,
+            signatureKeyId: this.deviceId,
+          });
+        }
+      }
+
+      this.db
+        .prepare(
+          `DELETE FROM external_calendar_sources
+           WHERE source_id = :sourceId`
+        )
+        .run({ sourceId });
+
+      this.logSecurityEvent('external_calendar_source_deleted', {
+        targetType: 'external_calendar_source',
+        targetId: sourceId,
+        details: {
+          provider: source.provider,
+          accountId: source.accountId,
+          remoteCalendarId: source.remoteCalendarId,
+          displayName: source.displayName,
+          deletedEventCount: deleteEvents ? eventIdsToDelete.length : 0,
+        },
+      });
+    });
+
+    return {
+      source,
+      deletedEventCount: deleteEvents ? eventIdsToDelete.length : 0,
+      snapshot: this.snapshot(),
+    };
+  }
+
   upsertExternalCalendarSource(input = {}) {
     const existing = this.db
       .prepare(
@@ -3844,7 +3914,7 @@ class CalendarStore {
     });
   }
 
-  deleteEvent(eventId) {
+  async deleteEvent(eventId, options = {}) {
     const event = this.getEventById(eventId);
     if (!event || event.deleted) {
       throw new Error('Event not found');
@@ -3857,6 +3927,15 @@ class CalendarStore {
     });
     if (outboundLinks.length > 0) {
       return this.deleteEventWithOutboundInvites(event, outboundLinks);
+    }
+
+    const importedLinks = this.listExternalEventLinks({
+      eventId,
+      syncStatus: 'active',
+      linkMode: 'imported',
+    });
+    if (options.deleteImportedProvider === true && importedLinks.length > 0) {
+      return this.deleteEventWithImportedProviderLinks(event, importedLinks);
     }
 
     this.maybeMarkDemoSeedModified();
@@ -3880,6 +3959,51 @@ class CalendarStore {
       this.recordChange({
         entity: 'event',
         entityId: eventId,
+        operation: 'delete',
+        patch: { deleted: true },
+        deviceId: this.deviceId,
+        signatureKeyId: this.deviceId,
+      });
+    });
+
+    return this.snapshot();
+  }
+
+  async deleteEventWithImportedProviderLinks(event, importedLinks = []) {
+    for (const link of importedLinks) {
+      const source = this.getExternalCalendarSourceById(link.sourceId);
+      if (!source) {
+        continue;
+      }
+
+      await this.oauthService.deleteOutboundCalendarEvent({
+        accountId: source.accountId,
+        remoteCalendarId: source.remoteCalendarId,
+        remoteEventId: link.remoteEventId,
+      });
+    }
+
+    this.maybeMarkDemoSeedModified();
+    this.withTransaction(() => {
+      this.db
+        .prepare(
+          `UPDATE event_metadata
+           SET deleted = 1,
+               updated_at = :updatedAt,
+               updated_by = :updatedBy
+           WHERE id = :id`
+        )
+        .run({
+          id: event.id,
+          updatedAt: nowIso(),
+          updatedBy: this.deviceId,
+        });
+
+      this.updateExternalLinkStatus(event.id, 'removed', { linkMode: 'imported' });
+
+      this.recordChange({
+        entity: 'event',
+        entityId: event.id,
         operation: 'delete',
         patch: { deleted: true },
         deviceId: this.deviceId,
@@ -4129,13 +4253,16 @@ class CalendarStore {
       : 'busy_only';
     const includedCalendarIds = new Set(scope.calendarIds || []);
     const includeAllCalendars = includedCalendarIds.size === 0;
-    const includePrivate = Boolean(scope.includePrivate);
+    const privateMode = ['busy', 'hide', 'details'].includes(scope.privateMode)
+      ? scope.privateMode
+      : (scope.includePrivate ? 'details' : 'busy');
     const dateFrom = scope.dateFrom ? new Date(scope.dateFrom) : null;
     const dateTo = scope.dateTo ? new Date(scope.dateTo) : null;
 
     const events = snapshot.events
       .filter((event) => {
-        if (!includePrivate && (event.visibility === 'private' || event.syncPolicy === 'internal_only')) {
+        const isPrivate = event.visibility === 'private' || event.syncPolicy === 'internal_only';
+        if (isPrivate && privateMode === 'hide') {
           return false;
         }
 
@@ -4154,7 +4281,11 @@ class CalendarStore {
 
         return true;
       })
-      .map((event) => this.sanitizeShareEvent(event, privacyLevel));
+      .map((event) => {
+        const isPrivate = event.visibility === 'private' || event.syncPolicy === 'internal_only';
+        const eventPrivacyLevel = isPrivate && privateMode !== 'details' ? 'busy_only' : privacyLevel;
+        return this.sanitizeShareEvent(event, eventPrivacyLevel);
+      });
 
     const calendars = this.buildShareCalendarCatalog(snapshot).filter(
       (calendar) => includeAllCalendars || includedCalendarIds.has(calendar.id)
@@ -4168,7 +4299,9 @@ class CalendarStore {
         calendarIds: Array.from(includedCalendarIds),
         dateFrom: scope.dateFrom || null,
         dateTo: scope.dateTo || null,
-        includePrivate,
+        privateMode,
+        includePrivate: privateMode === 'details',
+        calendarCatalog: calendars,
       },
       calendars,
       events,
@@ -4195,6 +4328,23 @@ class CalendarStore {
       throw new Error('Share id is required.');
     }
     return this.runHostedAction(() => this.hostedSyncService.revokeShare(shareId));
+  }
+
+  rotateHostedShareToken(shareId) {
+    if (!shareId) {
+      throw new Error('Share id is required.');
+    }
+    return this.runHostedAction(() => this.hostedSyncService.rotateShareToken(shareId));
+  }
+
+  updateHostedShareRecipients(input = {}) {
+    if (!input.shareId) {
+      throw new Error('Share id is required.');
+    }
+    const recipients = Array.isArray(input.recipients) ? input.recipients : [];
+    return this.runHostedAction(() =>
+      this.hostedSyncService.updateShareRecipients(input.shareId, recipients)
+    );
   }
 
   publishHostedShare(input = {}) {

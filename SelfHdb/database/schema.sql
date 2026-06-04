@@ -2,9 +2,22 @@ CREATE TABLE IF NOT EXISTS users (
   id CHAR(36) PRIMARY KEY,
   email VARCHAR(190) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  display_name VARCHAR(160) NULL,
+  role VARCHAR(24) NOT NULL DEFAULT 'member',
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at DATETIME(6) NOT NULL,
-  updated_at DATETIME(6) NOT NULL
+  updated_at DATETIME(6) NOT NULL,
+  INDEX idx_users_role_active (role, is_active)
+);
+
+CREATE TABLE IF NOT EXISTS install_settings (
+  id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+  organization_name VARCHAR(160) NOT NULL DEFAULT 'SelfHdb',
+  admin_user_id CHAR(36) NULL,
+  installed_at DATETIME(6) NOT NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  CONSTRAINT fk_install_settings_admin FOREIGN KEY (admin_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -150,7 +163,9 @@ CREATE TABLE IF NOT EXISTS calendar_shares (
   id CHAR(36) PRIMARY KEY,
   user_id CHAR(36) NOT NULL,
   name VARCHAR(160) NOT NULL,
+  public_token VARCHAR(128) NULL,
   token_hash CHAR(64) NOT NULL UNIQUE,
+  access_mode VARCHAR(24) NOT NULL DEFAULT 'link',
   privacy_level VARCHAR(32) NOT NULL DEFAULT 'busy_only',
   scope_json JSON NOT NULL,
   projection_json LONGTEXT NULL,
@@ -163,6 +178,50 @@ CREATE TABLE IF NOT EXISTS calendar_shares (
   CONSTRAINT fk_calendar_shares_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_calendar_shares_user_updated (user_id, updated_at),
   INDEX idx_calendar_shares_token_hash (token_hash)
+);
+
+CREATE TABLE IF NOT EXISTS invite_keys (
+  id CHAR(36) PRIMARY KEY,
+  code_hash CHAR(64) NOT NULL UNIQUE,
+  label VARCHAR(160) NOT NULL,
+  role VARCHAR(24) NOT NULL DEFAULT 'member',
+  max_uses INT UNSIGNED NULL,
+  use_count INT UNSIGNED NOT NULL DEFAULT 0,
+  expires_at DATETIME(6) NULL,
+  revoked_at DATETIME(6) NULL,
+  last_used_at DATETIME(6) NULL,
+  created_by_user_id CHAR(36) NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  CONSTRAINT fk_invite_keys_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_invite_keys_updated (updated_at)
+);
+
+CREATE TABLE IF NOT EXISTS invite_key_uses (
+  id CHAR(36) PRIMARY KEY,
+  invite_key_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  ip_address VARCHAR(64) NULL,
+  used_at DATETIME(6) NOT NULL,
+  CONSTRAINT fk_invite_key_uses_key FOREIGN KEY (invite_key_id) REFERENCES invite_keys(id) ON DELETE CASCADE,
+  CONSTRAINT fk_invite_key_uses_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_invite_key_uses_key (invite_key_id)
+);
+
+CREATE TABLE IF NOT EXISTS calendar_share_recipients (
+  id CHAR(36) PRIMARY KEY,
+  share_id CHAR(36) NOT NULL,
+  recipient_user_id CHAR(36) NULL,
+  email VARCHAR(190) NULL,
+  access_level VARCHAR(24) NOT NULL DEFAULT 'read',
+  revoked_at DATETIME(6) NULL,
+  last_accessed_at DATETIME(6) NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  CONSTRAINT fk_calendar_share_recipients_share FOREIGN KEY (share_id) REFERENCES calendar_shares(id) ON DELETE CASCADE,
+  CONSTRAINT fk_calendar_share_recipients_user FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_calendar_share_recipients_user (recipient_user_id),
+  INDEX idx_calendar_share_recipients_email (email)
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
